@@ -19,7 +19,7 @@ from tree_observation import TreeObservation
 
 # Parameters for the environment
 n_trials = 10000
-n_agents = 3
+n_agents = 1
 x_dim = 35
 y_dim = 35
 tree_depth = 3
@@ -62,10 +62,10 @@ def main():
     env = RailEnv(width=x_dim, height=y_dim, number_of_agents=n_agents,
                   # rail_generator=complex_rail_generator(nr_start_goal=5, nr_extra=5, min_dist=2, max_dist=99999),
                   # schedule_generator=complex_schedule_generator(),
-                  rail_generator=sparse_rail_generator(grid_mode=False, max_num_cities=4, max_rails_between_cities=3, max_rails_in_city=4, seed=1),
-                  schedule_generator=sparse_schedule_generator(speed_ration_map),
-                  # rail_generator=rail_generator,
-                  # schedule_generator=schedule_generator,
+                  # rail_generator=sparse_rail_generator(grid_mode=False, max_num_cities=4, max_rails_between_cities=3, max_rails_in_city=4, seed=1),
+                  # schedule_generator=sparse_schedule_generator(speed_ration_map),
+                  rail_generator=rail_generator,
+                  schedule_generator=schedule_generator,
                   malfunction_generator_and_process_data=malfunction_from_params(StochasticData(1 / 8000, 15, 50)),
                   obs_builder_object=TreeObservation(max_depth=tree_depth))
 

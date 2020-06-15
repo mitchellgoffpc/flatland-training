@@ -1,6 +1,4 @@
-import pprint
 import numpy as np
-from deepdiff import DeepDiff
 from collections import defaultdict
 
 from flatland.core.env_observation_builder import ObservationBuilder
@@ -11,7 +9,6 @@ from flatland.envs.observations import TreeObsForRailEnv
 
 ACTIONS = ['L', 'F', 'R', 'B']
 Node = TreeObsForRailEnv.Node
-printer = pprint.PrettyPrinter(indent=4)
 
 def first(list):
     return next(iter(list))
@@ -38,13 +35,11 @@ class TreeObservation(ObservationBuilder):
         self.max_depth = max_depth
         self.predictor = predictor
         self.observation_dim = 11
-        self.original_obs = TreeObsForRailEnv(max_depth=max_depth)
 
 
     # Create a graph representation of the current rail network
 
     def reset(self):
-        self.original_obs.reset()
         self.target_positions = { agent.target: 1 for agent in self.env.agents }
         self.edge_positions = defaultdict(list) # (cell.position, direction) -> [(start, end, direction, distance)]
         self.edge_paths = defaultdict(list)     # (node.position, direction) -> [(cell.position, direction)]
@@ -108,9 +103,22 @@ class TreeObservation(ObservationBuilder):
         self.nodes_with_agents_going,  self.edges_with_agents_going  = {}, defaultdict(dict)
         self.nodes_with_agents_coming, self.edges_with_agents_coming = {}, defaultdict(dict)
         self.nodes_with_malfunctions,  self.edges_with_malfunctions  = {}, defaultdict(dict)
+        self.nodes_with_departures,    self.edges_with_departures    = {}, defaultdict(dict)
 
         # Create some lookup tables that we can use later to figure out how far away the agents are from each other.
+        # started = any(a.status != RailAgentStatus.READY_TO_DEPART for a in self.env.agents)
         for agent in self.env.agents:
+            if agent.status == RailAgentStatus.READY_TO_DEPART and agent.initial_position:
+                # This line just replicates a bug in the original TreeObsForRailEnv. Once the bug is fixed,
+                # this check should be removed.
+                if any(a.position == agent.initial_position for a in self.env.agents):
+                    for direction in range(4):
+                        if (*agent.initial_position, direction) in self.graph:
+                            self.nodes_with_departures[(*agent.initial_position, direction)] = 1
+
+                        for start, _, start_direction, distance in self.edge_positions[(*agent.initial_position, direction)]:
+                            self.edges_with_departures[(*start.position, start_direction)][agent.handle] = distance
+
             if agent.status in [RailAgentStatus.ACTIVE, RailAgentStatus.DONE] and agent.position:
                 for direction in range(4):
                     if (*agent.position, direction) in self.graph:
@@ -130,16 +138,7 @@ class TreeObservation(ObservationBuilder):
                             self.edges_with_malfunctions[(*start.position, start_direction)][agent.handle] = \
                                 (distance, agent.malfunction_data['malfunction'])
 
-        my_tree = super().get_many(handles)
-        # original_tree = self.original_obs.get_many(handles)
-        # diff = DeepDiff(original_tree, my_tree)
-        # if len(diff):
-        #     print([agent.malfunction_data['malfunction'] for agent in self.env.agents])
-        #     print(self.nodes_with_malfunctions, self.edges_with_malfunctions)
-        #     printer.pprint(diff)
-        #     raise Exception("diff complete")
-
-        return my_tree
+        return super().get_many(handles)
 
     # Compute the observation for a single agent
     def get(self, handle):
@@ -189,10 +188,10 @@ class TreeObservation(ObservationBuilder):
 
         targets, agents, minor_nodes = [], [], []
         edge_length, max_malfunction_length = 0, 0
-        num_agents_same_direction, num_agents_opposite_direction = 0, 0
+        num_agents_same_direction, num_agents_other_direction = 0, 0
         distance_to_minor_node, distance_to_other_agent = np.inf, np.inf
         distance_to_own_target, distance_to_other_target = np.inf, np.inf
-        min_agent_speed = 1.0
+        min_agent_speed, num_agent_departures = 1.0, 0
 
         # Skip ahead until we get to a major node, logging any agents on the tracks along the way
         while True:
@@ -204,32 +203,39 @@ class TreeObservation(ObservationBuilder):
                   orientation = first(self.get_possible_transitions((row, column), dir))
             else: orientation = direction
 
+            # Find all the agents on the tracks ahead
             key = (*node.position, direction)
-            num_agents_same_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_going else 0
-            num_agents_opposite_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_coming else 0
-            num_agents_same_direction     += sum(1 for d, _ in self.edges_with_agents_going.get(key, {}).values()
-                                                   if total_distance + edge_length + d > 0)
-            num_agents_opposite_direction += sum(1 for d, _ in self.edges_with_agents_coming.get(key, {}).values()
-                                                   if total_distance + edge_length + d > 0)
+            num_agents_same_direction  += 1 if (*next_node.position, orientation) in self.nodes_with_agents_going else 0
+            num_agents_same_direction  += sum(1 for d, _ in self.edges_with_agents_going.get(key, {}).values()
+                                                if total_distance + edge_length + d > 0)
+            num_agents_other_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_coming else 0
+            num_agents_other_direction += sum(1 for d, _ in self.edges_with_agents_coming.get(key, {}).values()
+                                                if total_distance + edge_length + d > 0)
+            num_agent_departures += 1 if (*next_node.position, orientation) in self.nodes_with_departures else 0
+            num_agent_departures += sum(1 for d in self.edges_with_departures.get(key, {}).values()
+                                          if total_distance + edge_length + d > 0)
 
-            agent_distances =    [edge_length + d for d, _ in self.edges_with_agents_going.get(key, {}).values()
-                                                  if total_distance + edge_length + d > 0] + \
-                                 [edge_length + d for d, _ in self.edges_with_agents_coming.get(key, {}).values()
-                                                  if total_distance + edge_length + d > 0] + \
-                                 [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_going else np.inf] + \
-                                 [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_coming else np.inf]
-            agent_speeds       = [s for d, s in self.edges_with_agents_going.get(key, {}).values() if total_distance + edge_length + d > 0] + \
+            agent_distances =    [edge_length + d
+                                    for edge_dict in (self.edges_with_agents_going, self.edges_with_agents_coming)
+                                    for d, _ in edge_dict.get(key, {}).values()
+                                    if total_distance + edge_length + d > 0] + \
+                                 [edge_length + distance if (*next_node.position, orientation) in node_dict else np.inf
+                                    for node_dict in (self.nodes_with_agents_going, self.nodes_with_agents_coming)]
+
+            agent_speeds       = [s for d, s in self.edges_with_agents_going.get(key, {}).values()
+                                    if total_distance + edge_length + d > 0] + \
                                  [self.nodes_with_agents_going.get((*next_node.position, orientation), 1.0)]
-            agent_malfunctions = [t for x, (_, t) in self.edges_with_malfunctions.get(key, {}).items() if x != agent.handle] + \
+
+            agent_malfunctions = [t for d, t in self.edges_with_malfunctions.get(key, {}).values()
+                                    if total_distance + edge_length + d > 0] + \
                                  [self.nodes_with_malfunctions.get((*next_node.position, orientation), 0.0)]
 
+            # Generate features for those agents
             distance_to_other_agent = min(distance_to_other_agent, *agent_distances)
             min_agent_speed = min(min_agent_speed, *agent_speeds)
-            max_malfunction_length = max(max_malfunction_length, *agent_malfunctions) # if total_distance + edge_length + d > 0)
+            max_malfunction_length = max(max_malfunction_length, *agent_malfunctions)
 
-            # if agent.handle == 0 and agent.position == (14, 30) and depth == 1:
-            #     print(self.edges_with_agents_coming.keys(), node.position, direction)
-
+            # Generate features for any targets we've found
             if next_node.is_target:
                 if self.is_own_target(agent, next_node):
                       distance_to_own_target = min(distance_to_own_target, edge_length + distance)
@@ -262,10 +268,10 @@ class TreeObservation(ObservationBuilder):
                     dist_to_next_branch=total_distance + edge_length,
                     dist_min_to_target=self.env.distance_map.get()[(agent.handle, *node.position, orientation)] or 0,
                     num_agents_same_direction=num_agents_same_direction,
-                    num_agents_opposite_direction=num_agents_opposite_direction,
+                    num_agents_opposite_direction=num_agents_other_direction,
                     num_agents_malfunctioning=max_malfunction_length,
                     speed_min_fractional=min_agent_speed,
-                    num_agents_ready_to_depart=0,
+                    num_agents_ready_to_depart=num_agent_departures,
                     childs=children)
 
 
@@ -286,7 +292,3 @@ class TreeObservation(ObservationBuilder):
 
     def is_own_target(self, agent, node):
         return agent.target == node.position
-
-    def set_env(self, env):
-        super().set_env(env)
-        self.original_obs.set_env(env)
