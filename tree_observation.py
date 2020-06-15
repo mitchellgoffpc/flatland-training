@@ -105,9 +105,9 @@ class TreeObservation(ObservationBuilder):
     # Create a tree observation for each agent, based on the graph we created earlier
 
     def get_many(self, handles = []):
-        self.nodes_with_agents_going, self.nodes_with_agents_coming = {}, {}
-        self.edges_with_agents_going, self.edges_with_agents_coming = defaultdict(dict), defaultdict(dict)
-        self.edges_with_malfunctions = defaultdict(dict)
+        self.nodes_with_agents_going,  self.edges_with_agents_going  = {}, defaultdict(dict)
+        self.nodes_with_agents_coming, self.edges_with_agents_coming = {}, defaultdict(dict)
+        self.nodes_with_malfunctions,  self.edges_with_malfunctions  = {}, defaultdict(dict)
 
         # Create some lookup tables that we can use later to figure out how far away the agents are from each other.
         for agent in self.env.agents:
@@ -119,19 +119,25 @@ class TreeObservation(ObservationBuilder):
 
                     edge_dict = self.edges_with_agents_going if direction == agent.direction else self.edges_with_agents_coming
                     for start, _, start_direction, distance in self.edge_positions[(*agent.position, direction)]:
+                        edge_distance = distance if direction == agent.direction else start.edges[start_direction][1] - distance
                         edge_dict[(*start.position, start_direction)][agent.handle] = (distance, agent.speed_data['speed'])
 
-                if agent.malfunction_data['malfunction']:
-                    for start, _, direction, distance in self.edge_positions[(*agent.position, agent.direction)]:
-                        self.edges_with_malfunctions[(*start.position, direction)][agent.handle] = distance
+                    if agent.malfunction_data['malfunction']:
+                        if (*agent.position, direction) in self.graph:
+                            self.nodes_with_malfunctions[(*agent.position, direction)] = agent.malfunction_data['malfunction']
+
+                        for start, _, start_direction, distance in self.edge_positions[(*agent.position, direction)]:
+                            self.edges_with_malfunctions[(*start.position, start_direction)][agent.handle] = \
+                                (distance, agent.malfunction_data['malfunction'])
 
         my_tree = super().get_many(handles)
-        original_tree = self.original_obs.get_many(handles)
-        diff = DeepDiff(original_tree, my_tree)
-        if len(diff):
-            print([agent.position for agent in self.env.agents])
-            printer.pprint(diff)
-            raise Exception("diff complete")
+        # original_tree = self.original_obs.get_many(handles)
+        # diff = DeepDiff(original_tree, my_tree)
+        # if len(diff):
+        #     print([agent.malfunction_data['malfunction'] for agent in self.env.agents])
+        #     print(self.nodes_with_malfunctions, self.edges_with_malfunctions)
+        #     printer.pprint(diff)
+        #     raise Exception("diff complete")
 
         return my_tree
 
@@ -182,7 +188,7 @@ class TreeObservation(ObservationBuilder):
         original_position = node.position
 
         targets, agents, minor_nodes = [], [], []
-        edge_length, num_malfunctions = 0, 0
+        edge_length, max_malfunction_length = 0, 0
         num_agents_same_direction, num_agents_opposite_direction = 0, 0
         distance_to_minor_node, distance_to_other_agent = np.inf, np.inf
         distance_to_own_target, distance_to_other_target = np.inf, np.inf
@@ -199,21 +205,30 @@ class TreeObservation(ObservationBuilder):
             else: orientation = direction
 
             key = (*node.position, direction)
-            num_malfunctions += sum(1 for d in self.edges_with_malfunctions.get(key, []) if total_distance + d > 0)
-            num_agents_same_direction += sum(1 for d, _ in self.edges_with_agents_going.get(key, {}).values() if total_distance + d > 0)
-            num_agents_opposite_direction += sum(1 for d, _ in self.edges_with_agents_coming.get(key, {}).values() if total_distance + d > 0)
             num_agents_same_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_going else 0
             num_agents_opposite_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_coming else 0
+            num_agents_same_direction     += sum(1 for d, _ in self.edges_with_agents_going.get(key, {}).values()
+                                                   if total_distance + edge_length + d > 0)
+            num_agents_opposite_direction += sum(1 for d, _ in self.edges_with_agents_coming.get(key, {}).values()
+                                                   if total_distance + edge_length + d > 0)
 
-            agent_distances = [edge_length + d for d, _ in self.edges_with_agents_going.get(key, {}).values() if total_distance + edge_length + d > 0] + \
-                              [edge_length + d for d, _ in self.edges_with_agents_coming.get(key, {}).values() if total_distance + edge_length + d > 0] + \
-                              [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_going else np.inf] + \
-                              [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_coming else np.inf]
-            agent_speeds    = [s for d, s in self.edges_with_agents_going.get(key, {}).values() if total_distance + edge_length + d > 0] + \
-                              [self.nodes_with_agents_going.get((*next_node.position, orientation), 1.0)]
+            agent_distances =    [edge_length + d for d, _ in self.edges_with_agents_going.get(key, {}).values()
+                                                  if total_distance + edge_length + d > 0] + \
+                                 [edge_length + d for d, _ in self.edges_with_agents_coming.get(key, {}).values()
+                                                  if total_distance + edge_length + d > 0] + \
+                                 [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_going else np.inf] + \
+                                 [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_coming else np.inf]
+            agent_speeds       = [s for d, s in self.edges_with_agents_going.get(key, {}).values() if total_distance + edge_length + d > 0] + \
+                                 [self.nodes_with_agents_going.get((*next_node.position, orientation), 1.0)]
+            agent_malfunctions = [t for x, (_, t) in self.edges_with_malfunctions.get(key, {}).items() if x != agent.handle] + \
+                                 [self.nodes_with_malfunctions.get((*next_node.position, orientation), 0.0)]
 
             distance_to_other_agent = min(distance_to_other_agent, *agent_distances)
             min_agent_speed = min(min_agent_speed, *agent_speeds)
+            max_malfunction_length = max(max_malfunction_length, *agent_malfunctions) # if total_distance + edge_length + d > 0)
+
+            # if agent.handle == 0 and agent.position == (14, 30) and depth == 1:
+            #     print(self.edges_with_agents_coming.keys(), node.position, direction)
 
             if next_node.is_target:
                 if self.is_own_target(agent, next_node):
@@ -248,7 +263,7 @@ class TreeObservation(ObservationBuilder):
                     dist_min_to_target=self.env.distance_map.get()[(agent.handle, *node.position, orientation)] or 0,
                     num_agents_same_direction=num_agents_same_direction,
                     num_agents_opposite_direction=num_agents_opposite_direction,
-                    num_agents_malfunctioning=num_malfunctions,
+                    num_agents_malfunctioning=max_malfunction_length,
                     speed_min_fractional=min_agent_speed,
                     num_agents_ready_to_depart=0,
                     childs=children)

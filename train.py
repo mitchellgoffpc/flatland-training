@@ -27,7 +27,7 @@ eps_decay = 0.999
 eps_end = 0.005
 
 report_interval = 100
-render_interval = 2
+render_interval = 1000
 load_from_checkpoint = False
 train = False
 

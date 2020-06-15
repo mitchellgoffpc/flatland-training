@@ -19,6 +19,7 @@ schedule_generator = sparse_schedule_generator(speed_ration_map)
 # schedule_generator = complex_schedule_generator()
 
 width, height = 50, 50
+n_agents = 1
 
 try:
     with open(f'./railroads/rail_networks_{width}x{height}.pkl', 'rb') as file:
@@ -30,8 +31,8 @@ except:
 
 for _ in range(50): # generate 5000 episodes
     for i in tqdm(range(100), ncols=120):
-        map, info = rail_generator(width, height, 1, num_resets=0, np_random=np.random)
-        schedule = schedule_generator(map, 1, info['agents_hints'], num_resets=0, np_random=np.random)
+        map, info = rail_generator(width, height, n_agents, num_resets=0, np_random=np.random)
+        schedule = schedule_generator(map, n_agents, info['agents_hints'], num_resets=0, np_random=np.random)
         rail_networks.append((map, info))
         schedules.append(schedule)
 
