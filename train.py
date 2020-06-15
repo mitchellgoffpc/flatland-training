@@ -19,24 +19,24 @@ from tree_observation import TreeObservation
 
 # Parameters for the environment
 n_trials = 10000
-n_agents = 1
+n_agents = 3
 x_dim = 35
 y_dim = 35
 tree_depth = 3
 eps_decay = 0.999
 eps_end = 0.005
 
-report_interval = 50
-render_interval = 1000
+report_interval = 100
+render_interval = 2
 load_from_checkpoint = False
 train = False
 
 
 StochasticData = namedtuple('StochasticData', ('malfunction_rate', 'min_duration', 'max_duration'))
 
-with open(f'/Users/mitchell/Desktop/railroads/rail_networks_{x_dim}x{y_dim}.pkl', 'rb') as file:
+with open(f'./railroads/rail_networks_{x_dim}x{y_dim}.pkl', 'rb') as file:
     rail_networks = iter(pickle.load(file))
-with open(f'/Users/mitchell/Desktop/railroads/schedules_{x_dim}x{y_dim}.pkl', 'rb') as file:
+with open(f'./railroads/schedules_{x_dim}x{y_dim}.pkl', 'rb') as file:
     schedules = iter(pickle.load(file))
 
 rail_generator = lambda *args: next(rail_networks)
@@ -53,7 +53,7 @@ def render(env_renderer):
     env_renderer.render_env()
     image = env_renderer.get_image()
     cv2.imshow('Render', image)
-    cv2.waitKey(60)
+    cv2.waitKey(200)
 
 
 def main():
@@ -62,13 +62,14 @@ def main():
     env = RailEnv(width=x_dim, height=y_dim, number_of_agents=n_agents,
                   # rail_generator=complex_rail_generator(nr_start_goal=5, nr_extra=5, min_dist=2, max_dist=99999),
                   # schedule_generator=complex_schedule_generator(),
-                  rail_generator=rail_generator, # sparse_rail_generator(grid_mode=False, max_num_cities=4, max_rails_between_cities=3, max_rails_in_city=4, seed=1),
-                  schedule_generator=schedule_generator, # sparse_schedule_generator(speed_ration_map),
+                  rail_generator=sparse_rail_generator(grid_mode=False, max_num_cities=4, max_rails_between_cities=3, max_rails_in_city=4, seed=1),
+                  schedule_generator=sparse_schedule_generator(speed_ration_map),
+                  # rail_generator=rail_generator,
+                  # schedule_generator=schedule_generator,
                   malfunction_generator_and_process_data=malfunction_from_params(StochasticData(1 / 8000, 15, 50)),
                   obs_builder_object=TreeObservation(max_depth=tree_depth))
 
     # After training we want to render the results so we also load a renderer
-    env.reset(True, True)
     env_renderer = RenderTool(env, gl="PILSVG")
 
     # Given the depth of the tree observation and the number of features per node we get the following state_size
@@ -88,9 +89,9 @@ def main():
     action_dict, final_action_dict = {}, {}
     scores_window, done_window = deque(maxlen=500), deque(maxlen=500)
     action_prob = [0] * action_size
-    agent_obs = [None] * env.get_num_agents()
-    agent_obs_buffer = [None] * env.get_num_agents()
-    agent_action_buffer = [2] * env.get_num_agents()
+    agent_obs = [None] * n_agents
+    agent_obs_buffer = [None] * n_agents
+    agent_action_buffer = [2] * n_agents
 
     max_steps = int(3 * (x_dim + y_dim))
     update_values = False
@@ -103,13 +104,9 @@ def main():
         score = 0
 
         # Build agent specific observations
-        for a in range(env.get_num_agents()):
+        for a in range(n_agents):
             if obs[a]:
                 agent_obs[a] = normalize_observation(obs[a], tree_depth, observation_radius=10)
-                # transitions, agent_info, target_info = obs[a]
-                # transitions = np.reshape(transitions, (10, 10, 4, 4)).sum(2)
-                # agent_obs[a] = np.concatenate((transitions, agent_info[:,:,:1], target_info[:,:,:1]), axis=-1)
-                # agent_obs[a] = np.concatenate(obs[a], axis=-1)
                 agent_obs_buffer[a] = agent_obs[a].copy()
 
         # Run episode
@@ -137,11 +134,8 @@ def main():
                     agent_obs_buffer[a] = agent_obs[a].copy()
                     agent_action_buffer[a] = action_dict[a]
                 if next_obs[a]:
-                    agent_obs[a] = normalize_observation(next_obs[a], tree_depth, observation_radius=10)
-                    # transitions, agent_info, target_info = next_obs[a]
-                    # transitions = np.reshape(transitions, (10, 10, 4, 4)).sum(2)
-                    # agent_obs[a] = np.concatenate((transitions, agent_info[:,:,:1], target_info[:,:,:1]), axis=-1)
-                    # agent_obs[a] = np.concatenate(next_obs[a], axis=-1)
+                    pass
+                    # agent_obs[a] = normalize_observation(next_obs[a], tree_depth, observation_radius=10)
 
                 score += all_rewards[a] / env.get_num_agents()
 

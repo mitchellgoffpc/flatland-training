@@ -1,0 +1,43 @@
+import pickle
+import numpy as np
+from tqdm import tqdm
+
+from flatland.envs.rail_generators import sparse_rail_generator, complex_rail_generator
+from flatland.envs.schedule_generators import sparse_schedule_generator, complex_schedule_generator
+
+
+speed_ration_map = {
+    1.: 0.,        # Fast passenger train
+    1. / 2.: 1.0,   # Fast freight train
+    1. / 3.: 0.0,   # Slow commuter train
+    1. / 4.: 0.0 }  # Slow freight train
+
+rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=2, max_rails_in_city=3, seed=1)
+schedule_generator = sparse_schedule_generator(speed_ration_map)
+
+# rail_generator = complex_rail_generator(nr_start_goal=5, nr_extra=5, min_dist=10, max_dist=99999)
+# schedule_generator = complex_schedule_generator()
+
+width, height = 50, 50
+
+try:
+    with open(f'./railroads/rail_networks_{width}x{height}.pkl', 'rb') as file:
+        rail_networks = pickle.load(file)
+    with open(f'./railroads/schedules_{width}x{height}.pkl', 'rb') as file:
+        schedules = pickle.load(file)
+except:
+    rail_networks, schedules = [], []
+
+for _ in range(50): # generate 5000 episodes
+    for i in tqdm(range(100), ncols=120):
+        map, info = rail_generator(width, height, 1, num_resets=0, np_random=np.random)
+        schedule = schedule_generator(map, 1, info['agents_hints'], num_resets=0, np_random=np.random)
+        rail_networks.append((map, info))
+        schedules.append(schedule)
+
+    with open(f'./railroads/rail_networks_{width}x{height}.pkl', 'wb') as file:
+        pickle.dump(rail_networks, file)
+    with open(f'./railroads/schedules_{width}x{height}.pkl', 'wb') as file:
+        pickle.dump(schedules, file)
+
+print("Done")

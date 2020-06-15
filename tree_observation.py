@@ -1,32 +1,35 @@
-import collections
+import pprint
 import numpy as np
+from deepdiff import DeepDiff
+from collections import defaultdict
 
-from flatland.core.env import Environment
 from flatland.core.env_observation_builder import ObservationBuilder
-from flatland.core.env_prediction_builder import PredictionBuilder
 from flatland.core.grid.grid4_utils import get_new_position
-from flatland.core.grid.grid_utils import coordinate_to_position
-from flatland.envs.agent_utils import RailAgentStatus, EnvAgent
-
-tree_explored_actions_char = ['L', 'F', 'R', 'B']
-
-Node = collections.namedtuple('Node', ('dist_own_target_encountered',
-                                       'dist_other_target_encountered',
-                                       'dist_other_agent_encountered',
-                                       'dist_potential_conflict',
-                                       'dist_unusable_switch',
-                                       'dist_to_next_branch',
-                                       'dist_min_to_target',
-                                       'num_agents_same_direction',
-                                       'num_agents_opposite_direction',
-                                       'num_agents_malfunctioning',
-                                       'speed_min_fractional',
-                                       'num_agents_ready_to_depart',
-                                       'children'))
+from flatland.envs.agent_utils import RailAgentStatus
+from flatland.envs.observations import TreeObsForRailEnv
 
 
-def reverse_dir(self, direction):
-    return int((direction + 2) % 4)
+ACTIONS = ['L', 'F', 'R', 'B']
+Node = TreeObsForRailEnv.Node
+printer = pprint.PrettyPrinter(indent=4)
+
+def first(list):
+    return next(iter(list))
+
+def get_action(orientation, direction):
+    return ACTIONS[(direction - orientation + 1 + 4) % 4]
+
+
+class RailNode:
+    def __init__(self, position, edge_directions, is_target):
+        self.edges = {}
+        self.position = position
+        self.edge_directions = edge_directions
+        self.is_target = is_target
+
+    def __repr__(self):
+        return f'RailNode({self.position}, {len(self.edges)})'
+
 
 
 class TreeObservation(ObservationBuilder):
@@ -35,61 +38,107 @@ class TreeObservation(ObservationBuilder):
         self.max_depth = max_depth
         self.predictor = predictor
         self.observation_dim = 11
-        self.target_positions = {}
-        self.agent_positions = {}
-        self.agent_directions = {}
+        self.original_obs = TreeObsForRailEnv(max_depth=max_depth)
+
+
+    # Create a graph representation of the current rail network
 
     def reset(self):
-        self.target_positions = { tuple(agent.target): 1 for agent in self.env.agents }
+        self.original_obs.reset()
+        self.target_positions = { agent.target: 1 for agent in self.env.agents }
+        self.edge_positions = defaultdict(list) # (cell.position, direction) -> [(start, end, direction, distance)]
+        self.edge_paths = defaultdict(list)     # (node.position, direction) -> [(cell.position, direction)]
 
-    def get_many(self, handles = None):
-        if handles is None:
-            handles = []
+        # First, we find a node by starting at one of the agents and following the rails until we reach a junction
+        agent = first(self.env.agents)
+        position = agent.initial_position
+        direction = agent.direction
+        while not self.is_junction(position) and not self.is_target(position):
+            direction = first(self.get_possible_transitions(position, direction))
+            position = get_new_position(position, direction)
 
-        if self.predictor:
-            self.max_prediction_depth = 0
-            self.predicted_pos = {}
-            self.predicted_dir = {}
-            self.predictions = self.predictor.get()
-            if self.predictions:
-                for t in range(self.predictor.max_depth + 1):
-                    pos_list = []
-                    dir_list = []
-                    for a in handles:
-                        if self.predictions[a] is not None:
-                            pos_list.append(self.predictions[a][t][1:3])
-                            dir_list.append(self.predictions[a][t][3])
-                    self.predicted_pos.update({ t: coordinate_to_position(self.env.width, pos_list) })
-                    self.predicted_dir.update({ t: dir_list })
-                self.max_prediction_depth = len(self.predicted_pos)
+        # Now we create a graph representation of the rail network, starting from this node
+        transitions = self.get_all_transitions(position)
+        root_nodes = { t: RailNode(position, t, self.is_target(position)) for t in transitions if t }
+        self.graph = { (*position, d): root_nodes[t] for d, t in enumerate(transitions) if t }
 
-        # Update local lookup table for all agents' positions
-        # ignore other agents not in the grid (only status active and done)
-        # self.agent_positions = {tuple(agent.position): 1 for agent in self.env.agents if
-        #                         agent.status in [RailAgentStatus.ACTIVE, RailAgentStatus.DONE]}
+        for transitions, node in root_nodes.items():
+            for direction in transitions:
+                self.explore_branch(node, get_new_position(position, direction), direction)
 
-        self.agent_positions = {}
-        self.agent_directions = {}
-        self.agent_speeds = {}
-        self.agent_malfunctions = {}
-        self.agents_ready_to_depart = {}
 
+    def explore_branch(self, node, position, direction):
+        original_direction = direction
+        edge_positions = {}
+        distance = 1
+
+        # Explore until we find a junction
+        while not self.is_junction(position) and not self.is_target(position):
+            edge_positions[(*position, direction)] = distance
+            direction = first(self.get_possible_transitions(position, direction))
+            position = get_new_position(position, direction)
+            distance += 1
+
+        # Create any nodes that aren't in the graph yet
+        transitions = self.get_all_transitions(position)
+        nodes = { t: RailNode(position, t, self.is_target(position))
+                  for d, t in enumerate(transitions)
+                  if t and (*position, d) not in self.graph }
+
+        for d, t in enumerate(transitions):
+            if t in nodes:
+                self.graph[(*position, d)] = nodes[t]
+
+        # Connect the previous node to the next one, and update self.edge_positions
+        next_node = self.graph[(*position, direction)]
+        node.edges[original_direction] = (next_node, distance)
+        for key, distance in edge_positions.items():
+            self.edge_positions[key].append((node, next_node, original_direction, distance))
+            self.edge_paths[node.position, original_direction].append(key)
+
+        # Call ourselves recursively since we're exploring depth-first
+        for transitions, node in nodes.items():
+            for direction in transitions:
+                self.explore_branch(node, get_new_position(position, direction), direction)
+
+
+    # Create a tree observation for each agent, based on the graph we created earlier
+
+    def get_many(self, handles = []):
+        self.nodes_with_agents_going, self.nodes_with_agents_coming = {}, {}
+        self.edges_with_agents_going, self.edges_with_agents_coming = defaultdict(dict), defaultdict(dict)
+        self.edges_with_malfunctions = defaultdict(dict)
+
+        # Create some lookup tables that we can use later to figure out how far away the agents are from each other.
         for agent in self.env.agents:
             if agent.status in [RailAgentStatus.ACTIVE, RailAgentStatus.DONE] and agent.position:
-                self.agent_positions[agent.position] = 1
-                self.agent_directions[agent.position] = agent.direction
-                self.agent_speeds[agent.position] = agent.speed_data['speed']
-                self.agent_malfunctions[agent.position] = agent.malfunction_data['malfunction']
+                for direction in range(4):
+                    if (*agent.position, direction) in self.graph:
+                        node_dict = self.nodes_with_agents_going if direction == agent.direction else self.nodes_with_agents_coming
+                        node_dict[(*agent.position, direction)] = agent.speed_data['speed']
 
-            if agent.status in [RailAgentStatus.READY_TO_DEPART] and agent.initial_position:
-                self.agents_ready_to_depart[agent.initial_position] = \
-                    self.agents_ready_to_depart.get(agent.initial_position, 0) + 1
+                    edge_dict = self.edges_with_agents_going if direction == agent.direction else self.edges_with_agents_coming
+                    for start, _, start_direction, distance in self.edge_positions[(*agent.position, direction)]:
+                        edge_dict[(*start.position, start_direction)][agent.handle] = (distance, agent.speed_data['speed'])
 
-        return super().get_many(handles)
+                if agent.malfunction_data['malfunction']:
+                    for start, _, direction, distance in self.edge_positions[(*agent.position, agent.direction)]:
+                        self.edges_with_malfunctions[(*start.position, direction)][agent.handle] = distance
 
-    # Called by ObservationBuilder.get_many to compute the observation for a single agent
+        my_tree = super().get_many(handles)
+        original_tree = self.original_obs.get_many(handles)
+        diff = DeepDiff(original_tree, my_tree)
+        if len(diff):
+            print([agent.position for agent in self.env.agents])
+            printer.pprint(diff)
+            raise Exception("diff complete")
+
+        return my_tree
+
+    # Compute the observation for a single agent
     def get(self, handle):
         agent = self.env.agents[handle]
+        visited_cells = set()
 
         if agent.status == RailAgentStatus.READY_TO_DEPART:
               agent_position = agent.initial_position
@@ -99,263 +148,130 @@ class TreeObservation(ObservationBuilder):
               agent_position = agent.target
         else: return None
 
-        possible_transitions = self.env.rail.get_transitions(*agent_position, agent.direction)
-        num_transitions = np.count_nonzero(possible_transitions)
-
         # The root node contains information about the agent itself
+        children = { x: -np.inf for x in ACTIONS }
         dist_min_to_target = self.env.distance_map.get()[(handle, *agent_position, agent.direction)]
         agent_malfunctioning, agent_speed = agent.malfunction_data['malfunction'], agent.speed_data['speed']
-        root_node_observation = Node(0, 0, 0, 0, 0, 0, dist_min_to_target, 0, 0, agent_malfunctioning, agent_speed, 0, {})
+        root_tree_node = Node(0, 0, 0, 0, 0, 0, dist_min_to_target, 0, 0, agent_malfunctioning, agent_speed, 0, children)
 
-        visited = set()
+        # Then we build out the tree by exploring from this node
+        key = (*agent_position, agent.direction)
+        if key in self.graph: # If we're sitting on a junction, branch out immediately
+            node = self.graph[key]
+            if len(node.edges) > 1: # Major node
+                for direction in self.graph[key].edges.keys():
+                    root_tree_node.childs[get_action(agent.direction, direction)] = \
+                        self.get_tree_branch(agent, node, direction, visited_cells, 0, 1)
+            else: # Minor node
+                direction = first(self.get_possible_transitions(node.position, agent.direction))
+                root_tree_node.childs['F'] = self.get_tree_branch(agent, node, direction, visited_cells, 0, 1)
 
-        # Start from the current orientation, and see which transitions are available;
-        # organize them as [left, forward, right, back], relative to the current orientation
-        # If only one transition is possible, the tree is oriented with this transition as the forward branch.
-        orientation = np.argmax(possible_transitions) if num_transitions == 1 else agent.direction
+        else: # Just create a single child in the forward direction
+            prev_node, next_node, direction, distance = first(self.edge_positions[key])
+            path = self.edge_paths[prev_node.position, direction]
+            root_tree_node.childs['F'] = self.get_tree_branch(agent, prev_node, direction, visited_cells, -distance, 1)
 
-        for i, branch_direction in enumerate((orientation + i) % 4 for i in range(-1, 3)):
-            if possible_transitions[branch_direction]:
-                new_cell = get_new_position(agent_position, branch_direction)
-                branch_observation, branch_visited = self.explore_branch(handle, new_cell, branch_direction, 1, 1)
-                root_node_observation.children[tree_explored_actions_char[i]] = branch_observation
-                visited |= branch_visited
-            else:
-                # add cells filled with infinity if no transition is possible
-                root_node_observation.children[tree_explored_actions_char[i]] = -np.inf
+        self.env.dev_obs_dict[handle] = visited_cells
 
-        self.env.dev_obs_dict[handle] = visited
+        return root_tree_node
 
-        return root_node_observation
+    # Get the next tree node, starting from `node`, facing `orientation`, and moving in `direction`.
+    def get_tree_branch(self, agent, node, direction, visited_cells, total_distance, depth):
+        visited_cells.add((*node.position, 0))
+        next_node, distance = node.edges[direction]
+        original_position = node.position
 
-    def explore_branch(self, handle, position, direction, total_distance, depth):
-        """
-        Utility function to compute tree-based observations.
-        We walk along the branch and collect the information documented in the get() function.
-        If there is a branching point a new node is created and each possible branch is explored.
-        """
+        targets, agents, minor_nodes = [], [], []
+        edge_length, num_malfunctions = 0, 0
+        num_agents_same_direction, num_agents_opposite_direction = 0, 0
+        distance_to_minor_node, distance_to_other_agent = np.inf, np.inf
+        distance_to_own_target, distance_to_other_target = np.inf, np.inf
+        min_agent_speed = 1.0
 
-        # Base condition
-        if depth > self.max_depth:
-            return [], []
-
-        # Continue along this direction until the next switch, or until no more transitions are possible (i.e., dead-ends).
-        # We treat dead-ends as nodes, instead of going back, to avoid loops.
-        last_is_target = False
-        last_is_switch = False
-        last_is_dead_end = False
-        last_is_terminal = False
-
-        visited = set()
-        agent = self.env.agents[handle]
-        time_per_cell = np.reciprocal(agent.speed_data["speed"])
-        own_target_encountered = np.inf
-        other_agent_encountered = np.inf
-        other_target_encountered = np.inf
-        potential_conflict = np.inf
-        unusable_switch = np.inf
-        other_agent_same_direction = 0
-        other_agent_opposite_direction = 0
-        malfunctioning_agent = 0
-        min_fractional_speed = 1.
-        num_steps = 1
-        other_agent_ready_to_depart_encountered = 0
-
-        # Keep exploring down this path until we reach the next switch / target / dead end
+        # Skip ahead until we get to a major node, logging any agents on the tracks along the way
         while True:
-            if position in self.agent_positions:
-                other_agent_encountered = min(other_agent_encountered, total_distance)
-                malfunctioning_agent = max(malfunctioning_agent, self.agent_malfunctions[position])
+            visited_cells.update(self.edge_paths[node.position, direction])
+            visited_cells.add((*next_node.position, 0))
 
-                if position in self.agents_ready_to_depart:
-                      other_agent_ready_to_depart_encountered += 1
+            if self.edge_paths[node.position, direction]:
+                  row, column, dir = self.edge_paths[node.position, direction][-1]
+                  orientation = first(self.get_possible_transitions((row, column), dir))
+            else: orientation = direction
 
-                if self.agent_directions[position] == direction:
-                      other_agent_same_direction += 1
-                      min_fractional_speed = min(min_fractional_speed, self.agent_speeds[position])
-                else: other_agent_opposite_direction += 1
+            key = (*node.position, direction)
+            num_malfunctions += sum(1 for d in self.edges_with_malfunctions.get(key, []) if total_distance + d > 0)
+            num_agents_same_direction += sum(1 for d, _ in self.edges_with_agents_going.get(key, {}).values() if total_distance + d > 0)
+            num_agents_opposite_direction += sum(1 for d, _ in self.edges_with_agents_coming.get(key, {}).values() if total_distance + d > 0)
+            num_agents_same_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_going else 0
+            num_agents_opposite_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_coming else 0
 
-            # Check number of possible transitions for agent and total number of transitions in cell
-            possible_transitions = self.env.rail.get_transitions(*position, direction)
-            num_transitions = np.count_nonzero(possible_transitions)
+            agent_distances = [edge_length + d for d, _ in self.edges_with_agents_going.get(key, {}).values() if total_distance + edge_length + d > 0] + \
+                              [edge_length + d for d, _ in self.edges_with_agents_coming.get(key, {}).values() if total_distance + edge_length + d > 0] + \
+                              [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_going else np.inf] + \
+                              [edge_length + distance if (*next_node.position, orientation) in self.nodes_with_agents_coming else np.inf]
+            agent_speeds    = [s for d, s in self.edges_with_agents_going.get(key, {}).values() if total_distance + edge_length + d > 0] + \
+                              [self.nodes_with_agents_going.get((*next_node.position, orientation), 1.0)]
 
-            transition_bits = bin(self.env.rail.get_full_transitions(*position))
-            total_transitions = transition_bits.count("1")
-            crossing_found = int(transition_bits, 2) == int('1000010000100001', 2)
+            distance_to_other_agent = min(distance_to_other_agent, *agent_distances)
+            min_agent_speed = min(min_agent_speed, *agent_speeds)
 
-            # Register possible future conflict
-            predicted_time = int(total_distance * time_per_cell)
-            if self.predictor and predicted_time < self.max_prediction_depth:
-                int_position = coordinate_to_position(self.env.width, [position])
-                if total_distance < self.max_prediction_depth:
-                    pre_step = max(0, predicted_time - 1)
-                    post_step = min(self.max_prediction_depth - 1, predicted_time + 1)
+            if next_node.is_target:
+                if self.is_own_target(agent, next_node):
+                      distance_to_own_target = min(distance_to_own_target, edge_length + distance)
+                else: distance_to_other_target = min(distance_to_other_target, edge_length + distance)
 
-                    # Look for conflicting paths at distance total_distance
-                    if int_position in np.delete(self.predicted_pos[predicted_time], handle, 0):
-                        conflicting_agent = np.where(self.predicted_pos[predicted_time] == int_position)
-                        for ca in conflicting_agent[0]:
-                            if direction != self.predicted_dir[predicted_time][ca] \
-                                and possible_transitions[reverse_dir(self.predicted_dir[predicted_time][ca])] == 1 \
-                                and total_distance < potential_conflict:
-                                potential_conflict = total_distance
-                            if self.env.agents[ca].status == RailAgentStatus.DONE and total_distance < potential_conflict:
-                                potential_conflict = total_distance
+            node = next_node
+            edge_length += distance
 
-                    # Look for conflicting paths at distance num_step-1
-                    elif int_position in np.delete(self.predicted_pos[pre_step], handle, 0):
-                        conflicting_agent = np.where(self.predicted_pos[pre_step] == int_position)
-                        for ca in conflicting_agent[0]:
-                            if direction != self.predicted_dir[pre_step][ca] \
-                                and possible_transitions[reverse_dir(self.predicted_dir[pre_step][ca])] == 1 \
-                                and total_distance < potential_conflict:
-                                potential_conflict = total_distance
-                            if self.env.agents[ca].status == RailAgentStatus.DONE and total_distance < potential_conflict:
-                                potential_conflict = total_distance
+            if len(node.edges) == 1 and not self.is_own_target(agent, node): # This is a minor node, keep exploring
+                  direction, (next_node, distance) = first(node.edges.items())
+                  if not node.is_target:
+                      distance_to_minor_node = min(distance_to_minor_node, edge_length)
+            else: break
 
-                    # Look for conflicting paths at distance num_step+1
-                    elif int_position in np.delete(self.predicted_pos[post_step], handle, 0):
-                        conflicting_agent = np.where(self.predicted_pos[post_step] == int_position)
-                        for ca in conflicting_agent[0]:
-                            if direction != self.predicted_dir[post_step][ca] \
-                                and possible_transitions[reverse_dir(self.predicted_dir[post_step][ca])] == 1 \
-                                and total_distance < potential_conflict:
-                                potential_conflict = total_distance
-                            if self.env.agents[ca].status == RailAgentStatus.DONE and total_distance < potential_conflict:
-                                potential_conflict = total_distance
+        # Create a new tree node and populate its children
+        if depth < self.max_depth:
+            children = { x: -np.inf for x in ACTIONS }
+            if not self.is_own_target(agent, node):
+                for direction in node.edges.keys():
+                    children[get_action(orientation, direction)] = \
+                        self.get_tree_branch(agent, node, direction, visited_cells, total_distance + edge_length, depth + 1)
 
-            if position in self.target_positions and position != agent.target:
-                other_target_encountered = min(other_target_encountered, total_distance)
-            if position == agent.target:
-                own_target_encountered = min(own_target_encountered, total_distance)
+        else: children = {}
 
-            if (*position, direction) in visited:
-                last_is_terminal = True
-                break
-
-            visited.add((*position, direction))
-
-            # If the target node is encountered, pick that as node. Also, no further branching is possible.
-            if np.array_equal(position, self.env.agents[handle].target):
-                last_is_target = True
-                break
-
-            # Detect switches that can only be used by other agents.
-            if not crossing_found and num_transitions < 2 < total_transitions and total_distance < unusable_switch:
-                unusable_switch = total_distance
-
-            # Check if we've found a tree node (switch / target / dead end)
-            if num_transitions > 1:
-                last_is_switch = True
-                break
-
-            elif num_transitions == 1:
-                # Check if dead-end, or if we can go forward along direction
-                if total_transitions == 1:
-                    last_is_dead_end = True
-                    break
-                else:
-                    direction = np.argmax(possible_transitions)
-                    position = get_new_position(position, direction)
-                    num_steps += 1
-                    total_distance += 1
-
-            # These shouldn't exist, dead ends should let you exit backwards
-            elif num_transitions == 0:
-                last_is_terminal = True
-                break
-
-        # `position` is either a terminal node or a switch
-
-        # #############################
-        # #############################
-        # Modify here to append new / different features for each visited cell!
-
-        if last_is_target:
-            dist_to_next_branch = total_distance
-            dist_min_to_target = 0
-        elif last_is_terminal:
-            dist_to_next_branch = np.inf
-            dist_min_to_target = self.env.distance_map.get()[handle, position[0], position[1], direction]
-        else:
-            dist_to_next_branch = total_distance
-            dist_min_to_target = self.env.distance_map.get()[handle, position[0], position[1], direction]
-
-        node = Node(dist_own_target_encountered=own_target_encountered,
-                    dist_other_target_encountered=other_target_encountered,
-                    dist_other_agent_encountered=other_agent_encountered,
-                    dist_potential_conflict=potential_conflict,
-                    dist_unusable_switch=unusable_switch,
-                    dist_to_next_branch=dist_to_next_branch,
-                    dist_min_to_target=dist_min_to_target,
-                    num_agents_same_direction=other_agent_same_direction,
-                    num_agents_opposite_direction=other_agent_opposite_direction,
-                    num_agents_malfunctioning=malfunctioning_agent,
-                    speed_min_fractional=min_fractional_speed,
-                    num_agents_ready_to_depart=other_agent_ready_to_depart_encountered,
-                    children={})
+        return Node(dist_own_target_encountered=total_distance + distance_to_own_target,
+                    dist_other_target_encountered=total_distance + distance_to_other_target,
+                    dist_other_agent_encountered=total_distance + distance_to_other_agent,
+                    dist_potential_conflict=np.inf,
+                    dist_unusable_switch=total_distance + distance_to_minor_node,
+                    dist_to_next_branch=total_distance + edge_length,
+                    dist_min_to_target=self.env.distance_map.get()[(agent.handle, *node.position, orientation)] or 0,
+                    num_agents_same_direction=num_agents_same_direction,
+                    num_agents_opposite_direction=num_agents_opposite_direction,
+                    num_agents_malfunctioning=num_malfunctions,
+                    speed_min_fractional=min_agent_speed,
+                    num_agents_ready_to_depart=0,
+                    childs=children)
 
 
-        # Start from the current orientation, and see which transitions are available;
-        # organize them as [left, forward, right, back], relative to the current orientation
-        # Get the possible transitions
-        possible_transitions = self.env.rail.get_transitions(*position, direction)
-        for i, branch_direction in enumerate([(direction + 4 + i) % 4 for i in range(-1, 3)]):
-            if last_is_dead_end and self.env.rail.get_transition((*position, direction), (branch_direction + 2) % 4):
-                # Swap forward and back in case of dead-end, so that an agent can learn that going forward takes it back
-                new_cell = get_new_position(position, (branch_direction + 2) % 4)
-                branch_observation, branch_visited = \
-                    self.explore_branch(handle, new_cell, (branch_direction + 2) % 4, total_distance + 1, depth + 1)
-                node.children[tree_explored_actions_char[i]] = branch_observation
-                if len(branch_visited) != 0:
-                    visited |= branch_visited
+    # Helper functions
 
-            elif last_is_switch and possible_transitions[branch_direction]:
-                new_cell = get_new_position(position, branch_direction)
-                branch_observation, branch_visited = \
-                    self.explore_branch(handle, new_cell, branch_direction, total_distance + 1, depth + 1)
-                node.children[tree_explored_actions_char[i]] = branch_observation
-                if len(branch_visited):
-                    visited |= branch_visited
+    def get_possible_transitions(self, position, direction):
+        return [i for i, allowed in enumerate(self.env.rail.get_transitions(*position, direction)) if allowed]
 
-            else:
-                # no exploring possible, add just cells with infinity
-                node.children[tree_explored_actions_char[i]] = -np.inf
+    def get_all_transitions(self, position):
+        bit_groups = f'{self.env.rail.get_full_transitions(*position):019_b}'.split("_")
+        return [tuple(i for i, allowed in enumerate(bits) if allowed == '1') for bits in bit_groups]
 
-        if depth == self.max_depth:
-            node.children.clear()
+    def is_junction(self, position):
+        return any(len(transitions) > 1 for transitions in self.get_all_transitions(position))
 
-        return node, visited
+    def is_target(self, position):
+        return position in self.target_positions
 
+    def is_own_target(self, agent, node):
+        return agent.target == node.position
 
-    def util_print_obs_subtree(self, tree: Node):
-        self.print_node_features(tree, "root", "")
-        for direction in tree_explored_actions_char:
-            self.print_subtree(tree.children[direction], direction, "\t")
-
-    @staticmethod
-    def print_node_features(node: Node, label, indent):
-        print(indent, "Direction ", label, ": ", node.dist_own_target_encountered, ", ",
-              node.dist_other_target_encountered, ", ", node.dist_other_agent_encountered, ", ",
-              node.dist_potential_conflict, ", ", node.dist_unusable_switch, ", ", node.dist_to_next_branch, ", ",
-              node.dist_min_to_target, ", ", node.num_agents_same_direction, ", ", node.num_agents_opposite_direction,
-              ", ", node.num_agents_malfunctioning, ", ", node.speed_min_fractional, ", ",
-              node.num_agents_ready_to_depart)
-
-    def print_subtree(self, node, label, indent):
-        if node == -np.inf or not node:
-            print(indent, "Direction ", label, ": -np.inf")
-            return
-
-        self.print_node_features(node, label, indent)
-
-        if not node.children:
-            return
-
-        for direction in tree_explored_actions_char:
-            self.print_subtree(node.children[direction], direction, indent + "\t")
-
-    def set_env(self, env: Environment):
+    def set_env(self, env):
         super().set_env(env)
-        if self.predictor:
-            self.predictor.set_env(self.env)
+        self.original_obs.set_env(env)
