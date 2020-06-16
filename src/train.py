@@ -14,8 +14,8 @@ from flatland.envs.malfunction_generators import malfunction_from_params
 from flatland.utils.rendertools import RenderTool
 
 from dueling_double_dqn import Agent
-from observation_utils import normalize_observation
 from tree_observation import TreeObservation
+from observation_utils import normalize_observation
 
 
 # Parameters for the environment
@@ -23,13 +23,13 @@ n_trials = 10000
 n_agents = 1
 x_dim = 35
 y_dim = 35
-tree_depth = 5
+tree_depth = 2
 eps_decay = 0.999
 eps_end = 0.005
 
 report_interval = 100
-render_interval = 1000
-load_from_checkpoint = True
+render_interval = 500
+load_from_checkpoint = False
 train = True
 
 
@@ -55,7 +55,7 @@ def render(env_renderer):
     env_renderer.render_env()
     image = env_renderer.get_image()
     cv2.imshow('Render', image)
-    cv2.waitKey(200)
+    cv2.waitKey(100)
 
 
 def main():
@@ -114,10 +114,10 @@ def main():
         for step in range(max_steps):
             for a in range(env.get_num_agents()):
                 if info['action_required'][a]:
-                    # If an action is require, we want to store the obs a that step as well as the action
+                    # If an action is required, we want to store the obs a that step as well as the action
                     update_values = True
-                    # action = agent.act(agent_obs[a], eps=eps)
-                    action = np.random.randint(4)
+                    action = agent.act(agent_obs[a], eps=eps)
+                    # action = np.random.randint(4)
                     action_dict[a] = action
                     action_prob[action] += 1
                 else:
