@@ -3,6 +3,7 @@ import time
 import torch
 import pickle
 import numpy as np
+from pathlib import Path
 from collections import deque, namedtuple
 
 from flatland.envs.rail_env import RailEnv
@@ -22,21 +23,22 @@ n_trials = 10000
 n_agents = 1
 x_dim = 35
 y_dim = 35
-tree_depth = 3
+tree_depth = 5
 eps_decay = 0.999
 eps_end = 0.005
 
 report_interval = 100
 render_interval = 1000
-load_from_checkpoint = False
-train = False
+load_from_checkpoint = True
+train = True
 
 
+project_root = Path(__file__).parent.parent
 StochasticData = namedtuple('StochasticData', ('malfunction_rate', 'min_duration', 'max_duration'))
 
-with open(f'./railroads/rail_networks_{x_dim}x{y_dim}.pkl', 'rb') as file:
+with open(project_root / f'railroads/rail_networks_{x_dim}x{y_dim}.pkl', 'rb') as file:
     rail_networks = iter(pickle.load(file))
-with open(f'./railroads/schedules_{x_dim}x{y_dim}.pkl', 'rb') as file:
+with open(project_root / f'railroads/schedules_{x_dim}x{y_dim}.pkl', 'rb') as file:
     schedules = iter(pickle.load(file))
 
 rail_generator = lambda *args: next(rail_networks)
@@ -76,13 +78,12 @@ def main():
     num_features_per_node = env.obs_builder.observation_dim
     num_nodes = sum(np.power(4, i) for i in range(tree_depth + 1))
     state_size = num_features_per_node * num_nodes
-    # state_size = x_dim * y_dim * 23
     action_size = 5
 
     # Now we load a Double dueling DQN agent and initialize it from the checkpoint
     agent = Agent(state_size, action_size)
     if load_from_checkpoint:
-          start, eps = agent.load('./checkpoints/model_checkpoint', 0, 1.0)
+          start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
     else: start, eps = 0, 1.0
 
     # And some variables to keep track of the progress
@@ -134,8 +135,7 @@ def main():
                     agent_obs_buffer[a] = agent_obs[a].copy()
                     agent_action_buffer[a] = action_dict[a]
                 if next_obs[a]:
-                    pass
-                    # agent_obs[a] = normalize_observation(next_obs[a], tree_depth, observation_radius=10)
+                    agent_obs[a] = normalize_observation(next_obs[a], tree_depth, observation_radius=10)
 
                 score += all_rewards[a] / env.get_num_agents()
 
@@ -168,7 +168,7 @@ def main():
                   f'Action Probabilities: {action_probs} \t ' +
                   f'Time taken: {time.time() - start_time:.2f}s')
 
-            if train: agent.save('./checkpoints/model_checkpoint', episode, eps)
+            if train: agent.save(project_root / 'checkpoints', episode, eps)
             start_time = time.time()
             action_prob = [1] * action_size
 

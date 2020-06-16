@@ -1,10 +1,12 @@
 import pickle
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 
 from flatland.envs.rail_generators import sparse_rail_generator, complex_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator, complex_schedule_generator
 
+project_root = Path(__file__).parent.parent
 
 speed_ration_map = {
     1.: 0.,        # Fast passenger train
@@ -22,9 +24,9 @@ width, height = 50, 50
 n_agents = 1
 
 try:
-    with open(f'./railroads/rail_networks_{width}x{height}.pkl', 'rb') as file:
+    with open(project_root / f'railroads/rail_networks_{width}x{height}.pkl', 'rb') as file:
         rail_networks = pickle.load(file)
-    with open(f'./railroads/schedules_{width}x{height}.pkl', 'rb') as file:
+    with open(project_root / f'railroads/schedules_{width}x{height}.pkl', 'rb') as file:
         schedules = pickle.load(file)
 except:
     rail_networks, schedules = [], []
@@ -36,9 +38,9 @@ for _ in range(50): # generate 5000 episodes
         rail_networks.append((map, info))
         schedules.append(schedule)
 
-    with open(f'./railroads/rail_networks_{width}x{height}.pkl', 'wb') as file:
+    with open(project_root / f'railroads/rail_networks_{width}x{height}.pkl', 'wb') as file:
         pickle.dump(rail_networks, file)
-    with open(f'./railroads/schedules_{width}x{height}.pkl', 'wb') as file:
+    with open(project_root / f'railroads/schedules_{width}x{height}.pkl', 'wb') as file:
         pickle.dump(schedules, file)
 
 print("Done")

@@ -1,4 +1,3 @@
-import os
 import copy
 import random
 import pickle
@@ -7,7 +6,6 @@ from collections import namedtuple, deque, Iterable
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.optim as optim
 
 from model import QNetwork
 
@@ -33,26 +31,26 @@ class Agent:
         # Q-Network
         self.qnetwork_local = QNetwork(state_size, action_size).to(device)
         self.qnetwork_target = copy.deepcopy(self.qnetwork_local)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
+        self.optimizer = torch.optim.Adam(self.qnetwork_local.parameters(), lr=LR)
 
         # Replay memory
         self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE)
         self.t_step = 0
 
-    def save(self, filename, *data):
-        torch.save(self.qnetwork_local.state_dict(), filename + ".local")
-        torch.save(self.qnetwork_target.state_dict(), filename + ".target")
-        torch.save(self.optimizer.state_dict(), filename + '.optimizer')
-        with open('./checkpoints/model_checkpoint.meta', 'wb') as file:
+    def save(self, path, *data):
+        torch.save(self.qnetwork_local.state_dict(), path / "model_checkpoint.local")
+        torch.save(self.qnetwork_target.state_dict(), path / "model_checkpoint.target")
+        torch.save(self.optimizer.state_dict(), path / 'model_checkpoint.optimizer')
+        with open(path / 'model_checkpoint.meta', 'wb') as file:
             pickle.dump(data, file)
 
-    def load(self, filename, *defaults):
+    def load(self, path, *defaults):
         try:
             print("Loading model from checkpoint...")
-            self.qnetwork_local.load_state_dict(torch.load(filename + ".local"))
-            self.qnetwork_target.load_state_dict(torch.load(filename + ".target"))
-            self.optimizer.load_state_dict(torch.load(filename + '.optimizer'))
-            with open(filename + '.meta', 'rb') as file:
+            self.qnetwork_local.load_state_dict(torch.load(path / 'model_checkpoint.local'))
+            self.qnetwork_target.load_state_dict(torch.load(path / 'model_checkpoint.target'))
+            self.optimizer.load_state_dict(torch.load(path / 'model_checkpoint.optimizer'))
+            with open(path / 'model_checkpoint.meta', 'rb') as file:
                 return pickle.load(file)
         except:
             print("No checkpoint file was found")
