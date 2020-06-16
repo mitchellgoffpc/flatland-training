@@ -10,7 +10,6 @@ from flatland.envs.rail_env import RailEnv
 from flatland.envs.rail_generators import sparse_rail_generator, complex_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator, complex_schedule_generator
 from flatland.envs.malfunction_generators import malfunction_from_params
-# from flatland.envs.observations import TreeObsForRailEnv as TreeObservation
 from flatland.utils.rendertools import RenderTool
 
 from dueling_double_dqn import Agent
@@ -20,15 +19,15 @@ from observation_utils import normalize_observation
 
 # Parameters for the environment
 n_trials = 10000
-n_agents = 1
-x_dim = 35
-y_dim = 35
-tree_depth = 2
+n_agents = 5
+x_dim = 50
+y_dim = 50
+tree_depth = 3
 eps_decay = 0.999
 eps_end = 0.005
 
 report_interval = 100
-render_interval = 500
+render_interval = 1000
 load_from_checkpoint = False
 train = True
 
@@ -36,9 +35,9 @@ train = True
 project_root = Path(__file__).parent.parent
 StochasticData = namedtuple('StochasticData', ('malfunction_rate', 'min_duration', 'max_duration'))
 
-with open(project_root / f'railroads/rail_networks_{x_dim}x{y_dim}.pkl', 'rb') as file:
+with open(project_root / f'railroads/rail_networks_{n_agents}x{x_dim}x{y_dim}.pkl', 'rb') as file:
     rail_networks = iter(pickle.load(file))
-with open(project_root / f'railroads/schedules_{x_dim}x{y_dim}.pkl', 'rb') as file:
+with open(project_root / f'railroads/schedules_{n_agents}x{x_dim}x{y_dim}.pkl', 'rb') as file:
     schedules = iter(pickle.load(file))
 
 rail_generator = lambda *args: next(rail_networks)
@@ -64,7 +63,7 @@ def main():
     env = RailEnv(width=x_dim, height=y_dim, number_of_agents=n_agents,
                   # rail_generator=complex_rail_generator(nr_start_goal=5, nr_extra=5, min_dist=2, max_dist=99999),
                   # schedule_generator=complex_schedule_generator(),
-                  # rail_generator=sparse_rail_generator(grid_mode=False, max_num_cities=4, max_rails_between_cities=3, max_rails_in_city=4, seed=1),
+                  # rail_generator=sparse_rail_generator(grid_mode=False, max_num_cities=5, max_rails_between_cities=4, max_rails_in_city=4, seed=1),
                   # schedule_generator=sparse_schedule_generator(speed_ration_map),
                   rail_generator=rail_generator,
                   schedule_generator=schedule_generator,
@@ -112,7 +111,7 @@ def main():
 
         # Run episode
         for step in range(max_steps):
-            for a in range(env.get_num_agents()):
+            for a in range(n_agents):
                 if info['action_required'][a]:
                     # If an action is required, we want to store the obs a that step as well as the action
                     update_values = True
@@ -128,7 +127,7 @@ def main():
             next_obs, all_rewards, done, info = env.step(action_dict)
 
             # Update replay buffer and train agent
-            for a in range(env.get_num_agents()):
+            for a in range(n_agents):
                 # Only update the values when we are done or when an action was taken and thus relevant information is present
                 if update_values or done[a]:
                     agent.step(agent_obs_buffer[a], agent_action_buffer[a], all_rewards[a], agent_obs[a], done[a], train)
@@ -137,7 +136,7 @@ def main():
                 if next_obs[a]:
                     agent_obs[a] = normalize_observation(next_obs[a], tree_depth, observation_radius=10)
 
-                score += all_rewards[a] / env.get_num_agents()
+                score += all_rewards[a] / n_agents
 
             # Render
             if episode % render_interval == 0: render(env_renderer)
@@ -147,12 +146,12 @@ def main():
         eps = max(eps_end, eps_decay * eps)  # decrease epsilon
 
         # Collection information about training
-        tasks_finished = sum(done[i] for i in range(env.get_num_agents()))
-        done_window.append(tasks_finished / max(1, env.get_num_agents()))
+        tasks_finished = sum(done[i] for i in range(n_agents))
+        done_window.append(tasks_finished / max(1, n_agents))
         scores_window.append(score / max_steps)  # save most recent score
 
         action_probs = ', '.join(f'{x:.3f}' for x in action_prob / np.sum(action_prob))
-        print(f'\rTraining {env.get_num_agents()} Agents on ({x_dim},{y_dim}) \t ' +
+        print(f'\rTraining {n_agents} Agents on ({x_dim},{y_dim}) \t ' +
               f'Episode {episode} \t ' +
               f'Average Score: {np.mean(scores_window):.3f} \t ' +
               f'Dones: {100 * np.mean(done_window):.2f}% \t ' +
@@ -160,7 +159,7 @@ def main():
               f'Action Probabilities: {action_probs}', end=" ")
 
         if episode % report_interval == 0:
-            print(f'\rTraining {env.get_num_agents()} Agents on ({x_dim},{y_dim}) \t ' +
+            print(f'\rTraining {n_agents} Agents on ({x_dim},{y_dim}) \t ' +
                   f'Episode {episode} \t ' +
                   f'Average Score: {np.mean(scores_window):.3f} \t ' +
                   f'Dones: {100 * np.mean(done_window):.2f}% \t ' +

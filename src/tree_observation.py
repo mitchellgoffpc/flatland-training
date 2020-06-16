@@ -30,10 +30,9 @@ class RailNode:
 
 
 class TreeObservation(ObservationBuilder):
-    def __init__(self, max_depth, predictor = None):
+    def __init__(self, max_depth):
         super().__init__()
         self.max_depth = max_depth
-        self.predictor = predictor
         self.observation_dim = 11
 
 
@@ -69,9 +68,10 @@ class TreeObservation(ObservationBuilder):
 
         # Explore until we find a junction
         while not self.is_junction(position) and not self.is_target(position):
-            edge_positions[(*position, direction)] = distance
-            direction = first(self.get_possible_transitions(position, direction))
-            position = get_new_position(position, direction)
+            next_direction = first(self.get_possible_transitions(position, direction))
+            edge_positions[(*position, direction)] = (distance, next_direction)
+            position = get_new_position(position, next_direction)
+            direction = next_direction
             distance += 1
 
         # Create any nodes that aren't in the graph yet
@@ -87,9 +87,9 @@ class TreeObservation(ObservationBuilder):
         # Connect the previous node to the next one, and update self.edge_positions
         next_node = self.graph[(*position, direction)]
         node.edges[original_direction] = (next_node, distance)
-        for key, distance in edge_positions.items():
+        for key, (distance, next_direction) in edge_positions.items():
             self.edge_positions[key].append((node, next_node, original_direction, distance))
-            self.edge_paths[node.position, original_direction].append(key)
+            self.edge_paths[node.position, original_direction].append((*key, next_direction))
 
         # Call ourselves recursively since we're exploring depth-first
         for transitions, node in nodes.items():
@@ -106,7 +106,6 @@ class TreeObservation(ObservationBuilder):
         self.nodes_with_departures,    self.edges_with_departures    = {}, defaultdict(dict)
 
         # Create some lookup tables that we can use later to figure out how far away the agents are from each other.
-        # started = any(a.status != RailAgentStatus.READY_TO_DEPART for a in self.env.agents)
         for agent in self.env.agents:
             if agent.status == RailAgentStatus.READY_TO_DEPART and agent.initial_position:
                 # This line just replicates a bug in the original TreeObsForRailEnv. Once the bug is fixed,
@@ -173,7 +172,6 @@ class TreeObservation(ObservationBuilder):
 
         else: # Just create a single child in the forward direction
             prev_node, next_node, direction, distance = first(self.edge_positions[key])
-            path = self.edge_paths[prev_node.position, direction]
             root_tree_node.childs['F'] = self.get_tree_branch(agent, prev_node, direction, visited_cells, -distance, 1)
 
         self.env.dev_obs_dict[handle] = visited_cells
@@ -195,13 +193,11 @@ class TreeObservation(ObservationBuilder):
 
         # Skip ahead until we get to a major node, logging any agents on the tracks along the way
         while True:
-            visited_cells.update(self.edge_paths[node.position, direction])
-            visited_cells.add((*next_node.position, 0))
+            path = self.edge_paths.get((node.position, direction), [])
+            orientation = path[-1][-1] if path else direction
 
-            if self.edge_paths[node.position, direction]:
-                  row, column, dir = self.edge_paths[node.position, direction][-1]
-                  orientation = first(self.get_possible_transitions((row, column), dir))
-            else: orientation = direction
+            visited_cells.update(path)
+            visited_cells.add((*next_node.position, 0))
 
             # Find all the agents on the tracks ahead
             key = (*node.position, direction)

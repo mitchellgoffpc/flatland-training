@@ -14,14 +14,14 @@ speed_ration_map = {
     1. / 3.: 0.0,   # Slow commuter train
     1. / 4.: 0.0 }  # Slow freight train
 
-rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=2, max_rails_in_city=3, seed=1)
+rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=4, max_rails_between_cities=3, max_rails_in_city=4, seed=1)
 schedule_generator = sparse_schedule_generator(speed_ration_map)
 
 # rail_generator = complex_rail_generator(nr_start_goal=5, nr_extra=5, min_dist=10, max_dist=99999)
 # schedule_generator = complex_schedule_generator()
 
 width, height = 50, 50
-n_agents = 1
+n_agents = 3
 
 try:
     with open(project_root / f'railroads/rail_networks_{width}x{height}.pkl', 'rb') as file:
@@ -38,9 +38,9 @@ for _ in range(50): # generate 5000 episodes
         rail_networks.append((map, info))
         schedules.append(schedule)
 
-    with open(project_root / f'railroads/rail_networks_{width}x{height}.pkl', 'wb') as file:
+    with open(project_root / f'railroads/rail_networks_{n_agents}x{width}x{height}.pkl', 'wb') as file:
         pickle.dump(rail_networks, file)
-    with open(project_root / f'railroads/schedules_{width}x{height}.pkl', 'wb') as file:
+    with open(project_root / f'railroads/schedules_{n_agents}x{width}x{height}.pkl', 'wb') as file:
         pickle.dump(schedules, file)
 
 print("Done")
