@@ -28,28 +28,23 @@ eps_end = 0.005
 
 report_interval = 100
 render_interval = 1000
-load_from_checkpoint = True
+load_from_checkpoint = False
 train = True
 
 
 project_root = Path(__file__).parent.parent
 StochasticData = namedtuple('StochasticData', ('malfunction_rate', 'min_duration', 'max_duration'))
 
+# Load in the precomputed railway networks. If you want to generate railways on the fly, comment these lines out.
 with open(project_root / f'railroads/rail_networks_{n_agents}x{x_dim}x{y_dim}.pkl', 'rb') as file:
-    railways = pickle.load(file)
-    rail_networks = iter(railways)
+    data = pickle.load(file)
+    rail_networks = iter(data)
+    print(f"Loading {len(data)} railways...")
 with open(project_root / f'railroads/schedules_{n_agents}x{x_dim}x{y_dim}.pkl', 'rb') as file:
     schedules = iter(pickle.load(file))
 
 rail_generator = lambda *args: next(rail_networks)
 schedule_generator = lambda *args: next(schedules)
-print(f"Loading {len(railways)} railways")
-
-speed_ration_map = {
-    1.: 0.,        # Fast passenger train
-    1. / 2.: 1.0,   # Fast freight train
-    1. / 3.: 0.0,   # Slow commuter train
-    1. / 4.: 0.0 }  # Slow freight train
 
 
 def render(env_renderer):
@@ -57,15 +52,10 @@ def render(env_renderer):
     cv2.imshow('Render', env_renderer.get_image())
     cv2.waitKey(100)
 
-
 def main():
     np.random.seed(1)
 
     env = RailEnv(width=x_dim, height=y_dim, number_of_agents=n_agents,
-                  # rail_generator=complex_rail_generator(nr_start_goal=5, nr_extra=5, min_dist=2, max_dist=99999),
-                  # schedule_generator=complex_schedule_generator(),
-                  # rail_generator=sparse_rail_generator(grid_mode=False, max_num_cities=5, max_rails_between_cities=4, max_rails_in_city=4, seed=1),
-                  # schedule_generator=sparse_schedule_generator(speed_ration_map),
                   rail_generator=rail_generator,
                   schedule_generator=schedule_generator,
                   malfunction_generator_and_process_data=malfunction_from_params(StochasticData(1 / 8000, 15, 50)),
@@ -74,13 +64,13 @@ def main():
     # After training we want to render the results so we also load a renderer
     env_renderer = RenderTool(env, gl="PILSVG")
 
-    # Given the depth of the tree observation and the number of features per node we get the following state_size
+    # Calculate the state size based on the number of nodes in the tree observation
     num_features_per_node = env.obs_builder.observation_dim
     num_nodes = sum(np.power(4, i) for i in range(tree_depth + 1))
     state_size = num_features_per_node * num_nodes
     action_size = 5
 
-    # Now we load a Double dueling DQN agent and initialize it from the checkpoint
+    # Now we load a double dueling DQN agent and initialize it from the checkpoint
     agent = Agent(state_size, action_size)
     if load_from_checkpoint:
           start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
@@ -97,6 +87,12 @@ def main():
     max_steps = int(3 * (x_dim + y_dim))
     update_values = False
     start_time = time.time()
+
+    # We don't want to retrain on old railway networks when we restart from a checkpoint, so we just loop
+    # through the generators to get all the old networks out of the way
+    for _ in range(0, start):
+        rail_generator()
+        schedule_generator()
 
     # Start the training loop
     for episode in range(start + 1, n_trials + 1):
