@@ -16,6 +16,7 @@ from dueling_double_dqn import Agent
 from tree_observation import TreeObservation
 from observation_utils import normalize_observation
 
+from tensorboardX import SummaryWriter 
 
 # Parameters for the environment
 n_trials = 10000
@@ -54,6 +55,8 @@ def render(env_renderer):
 
 def main():
     np.random.seed(1)
+
+    writer = SummaryWriter('tensorboard_logs/dqn/agents: {}, tree_depth: {}'.format(n_agents,tree_depth))
 
     env = RailEnv(width=x_dim, height=y_dim, number_of_agents=n_agents,
                   rail_generator=rail_generator,
@@ -154,6 +157,11 @@ def main():
               f'Dones: {100 * np.mean(done_window):.2f}% \t ' +
               f'Epsilon: {eps:.2f} \t ' +
               f'Action Probabilities: {action_probs}', end=" ")
+
+        writer.add_scalar('performance/avg_score',np.mean(scores_window),episode)   
+        writer.add_scalar('performance/completions',np.mean(done_window),episode)   
+        [writer.add_scalar(f'action_probabilites/action_{i}',action_prob[i]/np.sum(action_prob),episode) for i in range(len(action_prob))]
+
 
         if episode % report_interval == 0:
             print(f'\rTraining {n_agents} Agents on ({x_dim},{y_dim}) \t ' +
