@@ -19,16 +19,16 @@ from observation_utils import normalize_observation
 
 # Parameters for the environment
 n_trials = 10000
-n_agents = 5
-x_dim = 50
-y_dim = 50
-tree_depth = 3
+n_agents = 1
+x_dim = 35
+y_dim = 35
+tree_depth = 2
 eps_decay = 0.999
 eps_end = 0.005
 
 report_interval = 100
 render_interval = 1000
-load_from_checkpoint = False
+load_from_checkpoint = True
 train = True
 
 
@@ -36,12 +36,14 @@ project_root = Path(__file__).parent.parent
 StochasticData = namedtuple('StochasticData', ('malfunction_rate', 'min_duration', 'max_duration'))
 
 with open(project_root / f'railroads/rail_networks_{n_agents}x{x_dim}x{y_dim}.pkl', 'rb') as file:
-    rail_networks = iter(pickle.load(file))
+    railways = pickle.load(file)
+    rail_networks = iter(railways)
 with open(project_root / f'railroads/schedules_{n_agents}x{x_dim}x{y_dim}.pkl', 'rb') as file:
     schedules = iter(pickle.load(file))
 
 rail_generator = lambda *args: next(rail_networks)
 schedule_generator = lambda *args: next(schedules)
+print(f"Loading {len(railways)} railways")
 
 speed_ration_map = {
     1.: 0.,        # Fast passenger train
@@ -52,8 +54,7 @@ speed_ration_map = {
 
 def render(env_renderer):
     env_renderer.render_env()
-    image = env_renderer.get_image()
-    cv2.imshow('Render', image)
+    cv2.imshow('Render', env_renderer.get_image())
     cv2.waitKey(100)
 
 

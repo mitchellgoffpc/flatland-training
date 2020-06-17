@@ -195,48 +195,55 @@ class TreeObservation(ObservationBuilder):
         while True:
             path = self.edge_paths.get((node.position, direction), [])
             orientation = path[-1][-1] if path else direction
+            dist = total_distance + edge_length
+            key = (*node.position, direction)
+            next_key = (*next_node.position, orientation)
 
             visited_cells.update(path)
             visited_cells.add((*next_node.position, 0))
 
-            # Find all the agents on the tracks ahead
-            key = (*node.position, direction)
-            num_agents_same_direction  += 1 if (*next_node.position, orientation) in self.nodes_with_agents_going else 0
-            num_agents_same_direction  += sum(1 for d, _ in self.edges_with_agents_going.get(key, {}).values()
-                                                if total_distance + edge_length + d > 0)
-            num_agents_other_direction += 1 if (*next_node.position, orientation) in self.nodes_with_agents_coming else 0
-            num_agents_other_direction += sum(1 for d, _ in self.edges_with_agents_coming.get(key, {}).values()
-                                                if total_distance + edge_length + d > 0)
-            num_agent_departures += 1 if (*next_node.position, orientation) in self.nodes_with_departures else 0
-            num_agent_departures += sum(1 for d in self.edges_with_departures.get(key, {}).values()
-                                          if total_distance + edge_length + d > 0)
+            # Check for other agents on the junctions up ahead
+            if next_key in self.nodes_with_agents_going:
+                num_agents_same_direction += 1
+                distance_to_other_agent = min(distance_to_other_agent, edge_length + distance)
+                min_agent_speed = min(min_agent_speed, self.nodes_with_agents_going[next_key])
 
-            agent_distances =    [edge_length + d
-                                    for edge_dict in (self.edges_with_agents_going, self.edges_with_agents_coming)
-                                    for d, _ in edge_dict.get(key, {}).values()
-                                    if total_distance + edge_length + d > 0] + \
-                                 [edge_length + distance if (*next_node.position, orientation) in node_dict else np.inf
-                                    for node_dict in (self.nodes_with_agents_going, self.nodes_with_agents_coming)]
+            if next_key in self.nodes_with_agents_coming:
+                num_agents_other_direction += 1
+                distance_to_other_agent = min(distance_to_other_agent, edge_length + distance)
 
-            agent_speeds       = [s for d, s in self.edges_with_agents_going.get(key, {}).values()
-                                    if total_distance + edge_length + d > 0] + \
-                                 [self.nodes_with_agents_going.get((*next_node.position, orientation), 1.0)]
+            if next_key in self.nodes_with_departures:
+                num_agent_departures += 1
+            if next_key in self.nodes_with_malfunctions:
+                max_malfunction_length = max(max_malfunction_length, self.nodes_with_malfunctions[next_key])
 
-            agent_malfunctions = [t for d, t in self.edges_with_malfunctions.get(key, {}).values()
-                                    if total_distance + edge_length + d > 0] + \
-                                 [self.nodes_with_malfunctions.get((*next_node.position, orientation), 0.0)]
+            # Check for other agents along the tracks up ahead
+            for d, s in self.edges_with_agents_going[key].values():
+                if dist + d > 0:
+                    num_agents_same_direction += 1
+                    min_agent_speed = min(min_agent_speed, s)
+                    distance_to_other_agent = min(distance_to_other_agent, edge_length + d)
 
-            # Generate features for those agents
-            distance_to_other_agent = min(distance_to_other_agent, *agent_distances)
-            min_agent_speed = min(min_agent_speed, *agent_speeds)
-            max_malfunction_length = max(max_malfunction_length, *agent_malfunctions)
+            for d, _ in self.edges_with_agents_coming[key].values():
+                if dist + d > 0:
+                    num_agents_other_direction += 1
+                    distance_to_other_agent = min(distance_to_other_agent, edge_length + d)
 
-            # Generate features for any targets we've found
+            for d in self.edges_with_departures[key].values():
+                if dist + d > 0:
+                    num_agent_departures += 1
+
+            for d, t in self.edges_with_malfunctions[key].values():
+                if dist + d > 0:
+                    max_malfunction_length = max(max_malfunction_length, t)
+
+            # Check for target nodes up ahead
             if next_node.is_target:
                 if self.is_own_target(agent, next_node):
                       distance_to_own_target = min(distance_to_own_target, edge_length + distance)
                 else: distance_to_other_target = min(distance_to_other_target, edge_length + distance)
 
+            # Move on to the next node
             node = next_node
             edge_length += distance
 
