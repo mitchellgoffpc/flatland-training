@@ -9,9 +9,9 @@ import torch.nn.functional as F
 
 from model import QNetwork
 
-BUFFER_SIZE = int(1e5)  # replay buffer size
+BUFFER_SIZE = int(2e5)  # replay buffer size
 BATCH_SIZE = 512  # minibatch size
-GAMMA = 0.98  # discount factor 0.99
+GAMMA = 0.998  # discount factor 0.99
 TAU = 1e-3  # for soft update of target parameters
 LR = 0.5e-4  # learning rate 0.5e-4 works
 UPDATE_EVERY = 10 # how often to update the network
@@ -121,10 +121,17 @@ class ReplayBuffer:
     def __init__(self, action_size, buffer_size, batch_size):
         self.action_size = action_size
         self.batch_size = batch_size
+        self.buffer_size = buffer_size
         self.memory = deque(maxlen=buffer_size)
 
     def add(self, state, action, reward, next_state, done):
         self.memory.append(Transition(np.expand_dims(state, 0), action, reward, np.expand_dims(next_state, 0), done))
+
+        # if len(self.memory) < self.buffer_size:
+        #     self.memory.append(Transition(np.expand_dims(state, 0), action, reward, np.expand_dims(next_state, 0), done))
+        # else:
+        #     position = np.random.randint(self.buffer_size) # max(np.random.randint(self.buffer_size), np.random.randint(self.buffer_size))
+        #     self.memory[position] = Transition(np.expand_dims(state, 0), action, reward, np.expand_dims(next_state, 0), done)
 
     def sample(self):
         experiences = random.sample(self.memory, k=self.batch_size)

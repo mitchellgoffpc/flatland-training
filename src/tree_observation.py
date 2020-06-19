@@ -139,6 +139,7 @@ class TreeObservation(ObservationBuilder):
 
         return super().get_many(handles)
 
+
     # Compute the observation for a single agent
     def get(self, handle):
         agent = self.env.agents[handle]
@@ -177,6 +178,7 @@ class TreeObservation(ObservationBuilder):
         self.env.dev_obs_dict[handle] = visited_cells
 
         return root_tree_node
+
 
     # Get the next tree node, starting from `node`, facing `orientation`, and moving in `direction`.
     def get_tree_branch(self, agent, node, direction, visited_cells, total_distance, depth):

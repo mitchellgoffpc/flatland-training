@@ -8,7 +8,7 @@ from flatland.envs.rail_generators import sparse_rail_generator, complex_rail_ge
 from flatland.envs.schedule_generators import sparse_schedule_generator, complex_schedule_generator
 
 
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parent.parent
 
 speed_ration_map = {
     1.: 0.,        # Fast passenger train
@@ -30,12 +30,13 @@ try:
         rail_networks = pickle.load(file)
     with open(project_root / f'railroads/schedules_{n_agents}x{width}x{height}.pkl', 'rb') as file:
         schedules = pickle.load(file)
+    print(f"Loading {len(rail_networks)} railways...")
 except:
     rail_networks, schedules = [], []
 
-print(f"Loading {len(rail_networks)} railways...")
 
-for _ in range(100): # generate 10000 episodes in 100 batches of 100
+# Generate 10000 episodes in 100 batches of 100
+for _ in range(100):
     for i in tqdm(range(100), ncols=120, leave=False):
         map, info = rail_generator(width, height, n_agents, num_resets=0, np_random=np.random)
         schedule = schedule_generator(map, n_agents, info['agents_hints'], num_resets=0, np_random=np.random)
