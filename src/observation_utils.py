@@ -1,7 +1,7 @@
 import numpy as np
 from tree_observation import ACTIONS
 
-EMPTY_NODE = np.array([0] * 11)
+EMPTY_NODE = np.array([np.inf] * 11)
 
 
 def norm_obs(obs):
@@ -39,4 +39,5 @@ def normalize_observation(tree, max_depth, observation_radius=0):
     obs_data = norm_obs(norm_obs_clip(data[:,:6].flatten()))
     distances = norm_obs_clip(data[:,6], normalize_to_range=True)
     agent_data = norm_obs(np.clip(data[:,7:].flatten(), -1, 1))
+    # return distances
     return np.concatenate((obs_data, distances, agent_data))
