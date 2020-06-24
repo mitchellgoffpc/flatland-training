@@ -26,13 +26,15 @@ parser.add_argument('--eval', default=True, dest='train', action='store_false', 
 parser.add_argument("--load-from-checkpoint", default=False, action='store_true', help="Whether to load the model from the last checkpoint")
 parser.add_argument("--report-interval", type=int, default=100, help="Iterations between reports")
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
-parser.add_argument("--grid-width", type=int, default=35, help="Number of columns in the environment grid")
-parser.add_argument("--grid-height", type=int, default=35, help="Number of rows in the environment grid")
+
+# Environment parameters
+parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
+parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
+parser.add_argument("--num-agents", type=int, default=2, help="Number of agents in each episode")
+parser.add_argument("--tree-depth", type=int, default=2, help="Depth of the observation tree")
 
 # Training parameters
 parser.add_argument("--num-episodes", type=int, default=10000, help="Number of episodes to train for")
-parser.add_argument("--num-agents", type=int, default=1, help="Number of agents in each episode")
-parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--epsilon-decay", type=float, default=0.997, help="Decay factor for epsilon-greedy exploration")
 
 flags = parser.parse_args()
@@ -57,7 +59,7 @@ schedule_generator = lambda *args: next(schedules)
 #     1. / 3.: 0.0,   # Slow commuter train
 #     1. / 4.: 0.0 }  # Slow freight train
 #
-# rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=3, max_rails_in_city=3)
+# rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=2, max_rails_in_city=3)
 # schedule_generator = sparse_schedule_generator(speed_ration_map)
 
 
@@ -65,7 +67,7 @@ schedule_generator = lambda *args: next(schedules)
 def render(env_renderer):
     env_renderer.render_env(show_observations=False)
     cv2.imshow('Render', cv2.cvtColor(env_renderer.get_image(), cv2.COLOR_BGR2RGB))
-    cv2.waitKey(100)
+    cv2.waitKey(30)
 
 
 # Main training loop
@@ -78,6 +80,8 @@ def main():
                   malfunction_generator_and_process_data=malfunction_from_params(MalfunctionParameters(1 / 8000, 15, 50)),
                   obs_builder_object=TreeObservation(max_depth=flags.tree_depth))
 
+    # env.stop_penalty = -0.5
+
     # After training we want to render the results so we also load a renderer
     env_renderer = RenderTool(env, gl="PILSVG")
 
@@ -88,7 +92,7 @@ def main():
     action_size = 5
 
     # Now we load a double dueling DQN agent and initialize it from the checkpoint
-    agent = Agent(state_size, action_size)
+    agent = Agent(state_size, action_size, flags.num_agents)
     if flags.load_from_checkpoint:
           start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
     else: start, eps = 0, 1.0
@@ -100,7 +104,7 @@ def main():
     agent_obs = [None] * flags.num_agents
     agent_obs_buffer = [None] * flags.num_agents
     agent_action_buffer = [2] * flags.num_agents
-    max_steps = 8 * (flags.grid_width + flags.grid_height) - 1
+    max_steps = 8 * (flags.grid_width + flags.grid_height)
     start_time = time.time()
 
     # We don't want to retrain on old railway networks when we restart from a checkpoint, so we just loop
@@ -118,9 +122,8 @@ def main():
 
         # Build agent specific observations
         for a in range(flags.num_agents):
-            if obs[a]:
-                agent_obs[a] = normalize_observation(obs[a], flags.tree_depth)
-                agent_obs_buffer[a] = agent_obs[a].copy()
+            agent_obs[a] = normalize_observation(obs[a], flags.tree_depth)
+            agent_obs_buffer[a] = agent_obs[a].copy()
 
         # Run episode
         for step in range(max_steps):
@@ -129,12 +132,11 @@ def main():
 
             for a in range(flags.num_agents):
                 if info['action_required'][a]:
-                      # action_dict[a] = agent.act(agent_obs[a], eps=eps)
-                      action_dict[a] = agent.act(agent_obs[a])
+                      action_dict[a] = agent.act(agent_obs[a], eps=eps)
                       # action_dict[a] = np.random.randint(5)
                       update_values = True
                       steps_taken += 1
-                else: action_dict[a] = 2
+                else: action_dict[a] = 0
 
             # Environment step
             obs, all_rewards, done, info = env.step(action_dict)
@@ -142,9 +144,14 @@ def main():
             # Update replay buffer and train agent
             for a in range(flags.num_agents):
                 # Only update the values when we are done or when an action was taken and thus relevant information is present
-                if update_values or done[a]:
-                    reward = 1. if all_rewards[a] > 0 else 0.
-                    agent.step(agent_obs_buffer[a], agent_action_buffer[a], reward, agent_obs[a], done[a], flags.train)
+                if update_values or done[a]: # or (not done[a] and step == max_steps - 1):
+                    # if all_rewards[a] > 0:
+                    #       reward = 1
+                    # elif not done[a] and step == max_steps - 1:
+                    #       reward = -1
+                    # else: reward = 0
+
+                    agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], all_rewards[a], agent_obs[a], done[a], flags.train)
                     agent_obs_buffer[a] = agent_obs[a].copy()
                     agent_action_buffer[a] = action_dict[a]
                 if obs[a]:

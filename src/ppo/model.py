@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 
 class PolicyNetwork(nn.Module):
-    def __init__(self, state_size, action_size, hidsize1=128, hidsize2=64):
+    def __init__(self, state_size, action_size, hidsize1=128, hidsize2=128):
         super().__init__()
         self.fc1 = nn.Linear(state_size, hidsize1)
         self.fc2 = nn.Linear(hidsize1, hidsize2)
