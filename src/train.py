@@ -11,8 +11,7 @@ from flatland.envs.rail_env import RailEnv
 from flatland.envs.rail_generators import sparse_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
-# from flatland.envs.observations import TreeObsForRailEnv as TreeObservation
-from flatland.utils.rendertools import RenderTool
+from flatland.utils.rendertools import RenderTool, AgentRenderVariant
 
 from dqn.agent import Agent
 # from ppo.agent import Agent
@@ -31,8 +30,8 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 # Environment parameters
 parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
 parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
-parser.add_argument("--num-agents", type=int, default=2, help="Number of agents in each episode")
-parser.add_argument("--tree-depth", type=int, default=2, help="Depth of the observation tree")
+parser.add_argument("--num-agents", type=int, default=1, help="Number of agents in each episode")
+parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 
 # Training parameters
 parser.add_argument("--num-episodes", type=int, default=10000, help="Number of episodes to train for")
@@ -55,8 +54,8 @@ schedule_generator = lambda *args: next(schedules)
 
 # Generate railways on the fly
 # speed_ration_map = {
-#     1 / 1:  1.0,   # Fast passenger train
-#     1 / 2.: 0.0,   # Fast freight train
+#     1 / 1:  0.0,   # Fast passenger train
+#     1 / 2.: 1.0,   # Fast freight train
 #     1 / 3.: 0.0,   # Slow commuter train
 #     1 / 4.: 0.0 }  # Slow freight train
 #
@@ -69,6 +68,14 @@ def render(env_renderer):
     env_renderer.render_env(show_observations=True)
     cv2.imshow('Render', cv2.cvtColor(env_renderer.get_image(), cv2.COLOR_BGR2RGB))
     cv2.waitKey(30)
+
+# Helper function to detect collisions
+def is_collision(obs):
+    return isinstance(obs.childs['L'], float) \
+       and isinstance(obs.childs['R'], float) \
+       and obs.childs['F'].dist_other_agent_encountered <= 1 \
+       and obs.childs['F'].dist_other_agent_encountered < obs.childs['F'].dist_unusable_switch \
+       and obs.childs['F'].num_agents_opposite_direction > 0
 
 
 # Main training loop
@@ -83,7 +90,11 @@ def main():
                   obs_builder_object=TreeObservation(max_depth=flags.tree_depth))
 
     # After training we want to render the results so we also load a renderer
-    env_renderer = RenderTool(env, gl="PILSVG")
+    env_renderer = RenderTool(env, gl="PILSVG",
+                              agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX,
+                              show_debug=True,
+                              screen_height=1000,
+                              screen_width=1000)
 
     # Calculate the state size based on the number of nodes in the tree observation
     num_features_per_node = env.obs_builder.observation_dim
@@ -150,18 +161,11 @@ def main():
             for a in range(flags.num_agents):
                 if done[a] and not agent.finished[a]:
                       rewards[a] = 1
-                elif not done[a] \
-                     and isinstance(obs[a].childs['L'], float) \
-                     and isinstance(obs[a].childs['R'], float) \
-                     and obs[a].childs['F'].dist_other_agent_encountered <= 1 \
-                     and obs[a].childs['F'].dist_other_agent_encountered < obs[a].childs['F'].dist_unusable_switch \
-                     and obs[a].childs['F'].num_agents_opposite_direction > 0:
+                elif not done[a] and is_collision(obs[a]):
                       # done['__all__'] = True
-                      # rewards[a] = -.5 - episode / 1500
-                      # rewards[a] = -1
-                      collision = True
                       rewards[a] = -1
-                else: rewards[a] = -.02
+                      collision = True
+                else: rewards[a] = -.5 # all_rewards[a]
 
             # Update replay buffer and train agent
             for a in range(flags.num_agents):
