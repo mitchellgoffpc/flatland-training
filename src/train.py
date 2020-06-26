@@ -11,10 +11,11 @@ from flatland.envs.rail_env import RailEnv
 from flatland.envs.rail_generators import sparse_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
+# from flatland.envs.observations import TreeObsForRailEnv as TreeObservation
 from flatland.utils.rendertools import RenderTool
 
-# from dqn.agent import Agent
-from ppo.agent import Agent
+from dqn.agent import Agent
+# from ppo.agent import Agent
 from tree_observation import TreeObservation
 from observation_utils import normalize_observation
 
@@ -54,10 +55,10 @@ schedule_generator = lambda *args: next(schedules)
 
 # Generate railways on the fly
 # speed_ration_map = {
-#     1.: 0.,        # Fast passenger train
-#     1. / 2.: 1.0,   # Fast freight train
-#     1. / 3.: 0.0,   # Slow commuter train
-#     1. / 4.: 0.0 }  # Slow freight train
+#     1 / 1:  1.0,   # Fast passenger train
+#     1 / 2.: 0.0,   # Fast freight train
+#     1 / 3.: 0.0,   # Slow commuter train
+#     1 / 4.: 0.0 }  # Slow freight train
 #
 # rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=2, max_rails_in_city=3)
 # schedule_generator = sparse_schedule_generator(speed_ration_map)
@@ -65,7 +66,7 @@ schedule_generator = lambda *args: next(schedules)
 
 # Helper function to render the environment
 def render(env_renderer):
-    env_renderer.render_env(show_observations=False)
+    env_renderer.render_env(show_observations=True)
     cv2.imshow('Render', cv2.cvtColor(env_renderer.get_image(), cv2.COLOR_BGR2RGB))
     cv2.waitKey(30)
 
@@ -75,12 +76,11 @@ def main():
     np.random.seed(1)
 
     env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
+                  remove_agents_at_target=True,
                   rail_generator=rail_generator,
                   schedule_generator=schedule_generator,
                   malfunction_generator_and_process_data=malfunction_from_params(MalfunctionParameters(1 / 8000, 15, 50)),
                   obs_builder_object=TreeObservation(max_depth=flags.tree_depth))
-
-    # env.stop_penalty = -0.5
 
     # After training we want to render the results so we also load a renderer
     env_renderer = RenderTool(env, gl="PILSVG")
@@ -100,7 +100,7 @@ def main():
     if not flags.train: eps = 0.0
 
     # And some variables to keep track of the progress
-    scores_window, steps_window, done_window = deque(maxlen=200), deque(maxlen=200), deque(maxlen=200)
+    scores_window, steps_window, collisions_window, done_window = [deque(maxlen=200) for _ in range(4)]
     agent_obs = [None] * flags.num_agents
     agent_obs_buffer = [None] * flags.num_agents
     agent_action_buffer = [2] * flags.num_agents
@@ -116,9 +116,10 @@ def main():
 
     # Start the training loop
     for episode in range(start + 1, flags.num_episodes + 1):
+        agent.reset()
         env_renderer.reset()
         obs, info = env.reset(True, True)
-        score, steps_taken = 0, 0
+        score, steps_taken, collision = 0, 0, False
 
         # Build agent specific observations
         for a in range(flags.num_agents):
@@ -127,31 +128,47 @@ def main():
 
         # Run episode
         for step in range(max_steps):
-            update_values = False
+            update_values = [False] * flags.num_agents
             action_dict = {}
 
             for a in range(flags.num_agents):
                 if info['action_required'][a]:
                       action_dict[a] = agent.act(agent_obs[a], eps=eps)
                       # action_dict[a] = np.random.randint(5)
-                      update_values = True
+                      update_values[a] = True
                       steps_taken += 1
                 else: action_dict[a] = 0
 
             # Environment step
             obs, all_rewards, done, info = env.step(action_dict)
 
+            if step == max_steps - 1:
+                done['__all__'] = True
+
+            # Calculate rewards
+            rewards = [0] * flags.num_agents
+            for a in range(flags.num_agents):
+                if done[a] and not agent.finished[a]:
+                      rewards[a] = 1
+                elif not done[a] \
+                     and isinstance(obs[a].childs['L'], float) \
+                     and isinstance(obs[a].childs['R'], float) \
+                     and obs[a].childs['F'].dist_other_agent_encountered <= 1 \
+                     and obs[a].childs['F'].dist_other_agent_encountered < obs[a].childs['F'].dist_unusable_switch \
+                     and obs[a].childs['F'].num_agents_opposite_direction > 0:
+                      # done['__all__'] = True
+                      # rewards[a] = -.5 - episode / 1500
+                      # rewards[a] = -1
+                      collision = True
+                      rewards[a] = -1
+                else: rewards[a] = -.02
+
             # Update replay buffer and train agent
             for a in range(flags.num_agents):
                 # Only update the values when we are done or when an action was taken and thus relevant information is present
-                if update_values or done[a]: # or (not done[a] and step == max_steps - 1):
-                    # if all_rewards[a] > 0:
-                    #       reward = 1
-                    # elif not done[a] and step == max_steps - 1:
-                    #       reward = -1
-                    # else: reward = 0
-
-                    agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], all_rewards[a], agent_obs[a], done[a], flags.train)
+                finished = done['__all__'] or done[a]
+                if update_values[a] or (finished and not agent.finished[a]):
+                    agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], rewards[a], agent_obs[a], finished, flags.train)
                     agent_obs_buffer[a] = agent_obs[a].copy()
                     agent_action_buffer[a] = action_dict[a]
                 if obs[a]:
@@ -161,6 +178,7 @@ def main():
 
             # Render
             if flags.render_interval and episode % flags.render_interval == 0:
+            # if collision:
                 render(env_renderer)
             if done['__all__']: break
 
@@ -173,11 +191,13 @@ def main():
         done_window.append(tasks_finished / max(1, flags.num_agents))
         scores_window.append(score / max_steps)
         steps_window.append(steps_taken)
+        collisions_window.append(1. if collision else 0.)
 
         print(f'\rTraining {flags.num_agents} Agents on ({flags.grid_width},{flags.grid_height}) \t ' +
               f'Episode {episode} \t ' +
               f'Average Score: {np.mean(scores_window):.3f} \t ' +
               f'Average Steps Taken: {np.mean(steps_window):.1f} \t ' +
+              f'Collisions: {100 * np.mean(collisions_window):.2f}% \t ' +
               f'Finished: {100 * np.mean(done_window):.2f}% \t ' +
               f'Epsilon: {eps:.2f}', end=" ")
 
@@ -186,6 +206,7 @@ def main():
                   f'Episode {episode} \t ' +
                   f'Average Score: {np.mean(scores_window):.3f} \t ' +
                   f'Average Steps Taken: {np.mean(steps_window):.1f} \t ' +
+                  f'Collisions: {100 * np.mean(collisions_window):.2f}% \t ' +
                   f'Finished: {100 * np.mean(done_window):.2f}% \t ' +
                   f'Epsilon: {eps:.2f} \t ' +
                   f'Time taken: {time.time() - start_time:.2f}s')

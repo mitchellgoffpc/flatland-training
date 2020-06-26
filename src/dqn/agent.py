@@ -7,9 +7,9 @@ import torch.nn.functional as F
 from dqn.model import QNetwork
 from replay_memory import ReplayBuffer
 
-BUFFER_SIZE = 200_000
-BATCH_SIZE = 512
-GAMMA = 0.998
+BUFFER_SIZE = 400_000
+BATCH_SIZE = 1024
+GAMMA = 0.995
 TAU = 1e-3
 LR = 0.5e-4
 UPDATE_EVERY = 20
@@ -18,7 +18,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class Agent:
-    def __init__(self, state_size, action_size, double_dqn=True):
+    def __init__(self, state_size, action_size, num_agents, double_dqn=True):
         self.action_size = action_size
         self.double_dqn = double_dqn
 
@@ -29,7 +29,11 @@ class Agent:
 
         # Replay memory
         self.memory = ReplayBuffer(BUFFER_SIZE)
+        self.num_agents = num_agents
         self.t_step = 0
+
+    def reset(self):
+        self.finished = [False] * self.num_agents
 
 
     # Decide on an action to take in the environment
@@ -49,8 +53,11 @@ class Agent:
     # Record the results of the agent's action and update the model
 
     def step(self, handle, state, action, reward, next_state, done, train=True):
+        if self.finished[handle]: return
+
         # Save experience in replay memory
         self.memory.push(state, action, reward, next_state, done)
+        self.finished[handle] = done
 
         # Learn every UPDATE_EVERY time steps.
         self.t_step = (self.t_step + 1) % UPDATE_EVERY

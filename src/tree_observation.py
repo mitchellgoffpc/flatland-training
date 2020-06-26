@@ -110,7 +110,7 @@ class TreeObservation(ObservationBuilder):
             if agent.status == RailAgentStatus.READY_TO_DEPART and agent.initial_position:
                 # This line just replicates a bug in the original TreeObsForRailEnv. Once the bug is fixed,
                 # this check should be removed.
-                if any(a.position == agent.initial_position for a in self.env.agents):
+                if True: # any(a.position == agent.initial_position for a in self.env.agents):
                     for direction in range(4):
                         if (*agent.initial_position, direction) in self.graph:
                             self.nodes_with_departures[(*agent.initial_position, direction)] = 1

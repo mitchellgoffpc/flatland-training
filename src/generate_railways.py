@@ -11,10 +11,10 @@ from flatland.envs.schedule_generators import sparse_schedule_generator, complex
 project_root = Path(__file__).resolve().parent.parent
 
 speed_ration_map = {
-    1.: 0.,        # Fast passenger train
-    1. / 2.: 1.0,   # Fast freight train
-    1. / 3.: 0.0,   # Slow commuter train
-    1. / 4.: 0.0 }  # Slow freight train
+    1 / 1:  1.0,   # Fast passenger train
+    1 / 2.: 0.0,   # Fast freight train
+    1 / 3.: 0.0,   # Slow commuter train
+    1 / 4.: 0.0 }  # Slow freight train
 
 rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=2, max_rails_in_city=3, seed=time.time())
 schedule_generator = sparse_schedule_generator(speed_ration_map)
@@ -23,7 +23,7 @@ schedule_generator = sparse_schedule_generator(speed_ration_map)
 # schedule_generator = complex_schedule_generator()
 
 width, height = 50, 50
-n_agents = 2
+n_agents = 3
 
 try:
     with open(project_root / f'railroads/rail_networks_{n_agents}x{width}x{height}.pkl', 'rb') as file:

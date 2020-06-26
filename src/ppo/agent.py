@@ -1,5 +1,6 @@
 import pickle
 import random
+import numpy as np
 import torch
 from torch.distributions.categorical import Categorical
 
@@ -7,11 +8,11 @@ from ppo.model import PolicyNetwork
 from replay_memory import Episode, ReplayBuffer
 
 BUFFER_SIZE = 32_000
-BATCH_SIZE = 512
-GAMMA = 0.9
-LR = 0.5e-4
-CLIP_FACTOR = .1
-UPDATE_EVERY = 40
+BATCH_SIZE = 4096
+GAMMA = 0.8
+LR = 0.3e-4
+CLIP_FACTOR = .005
+UPDATE_EVERY = 80
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -26,6 +27,9 @@ class Agent:
         self.memory = ReplayBuffer(BUFFER_SIZE)
         self.t_step = 0
 
+    def reset(self):
+        self.finished = [False] * len(self.episodes)
+
 
     # Decide on an action to take in the environment
     def act(self, state, eps=None):
@@ -37,13 +41,15 @@ class Agent:
 
     # Record the results of the agent's action and update the model
     def step(self, handle, state, action, reward, next_state, done, train=True):
-        reward = 1 if reward > 0 else 0
-        self.episodes[handle].push(state, action, reward, next_state, done)
+        # reward = 1 if done and not self.finished[handle] else 0
+        if not self.finished[handle]:
+            self.episodes[handle].push(state, action, reward, next_state, done)
 
-        if done:
+        if done and not self.finished[handle]:
             self.episodes[handle].discount_rewards(GAMMA)
             self.memory.push_episode(self.episodes[handle])
             self.episodes[handle].reset()
+            self.finished[handle] = True
 
         # Learn every UPDATE_EVERY time steps.
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
@@ -56,6 +62,7 @@ class Agent:
         responsible_outputs = torch.gather(self.policy(states), 1, actions)
         old_responsible_outputs = torch.gather(self.old_policy(states), 1, actions).detach()
 
+        # rewards = rewards - rewards.mean()
         ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
         clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
         loss = -torch.min(ratio * rewards, clamped_ratio * rewards).mean()

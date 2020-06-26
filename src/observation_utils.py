@@ -5,7 +5,7 @@ EMPTY_NODE = np.array([0] * 6 + [np.inf] + [0] * 4)
 
 
 def norm_obs(obs):
-    return (obs - np.mean(obs)) # / max(1, np.std(obs))
+    return (obs - np.mean(obs)) / max(1, np.std(obs))
 
 def norm_obs_clip(obs, clip_min=-1, clip_max=1, fixed_radius=0, normalize_to_range=False):
     if fixed_radius > 0:
@@ -36,8 +36,8 @@ def create_tree_features(node, depth, max_depth, data):
 def normalize_observation(tree, max_depth, observation_radius=0):
     data = np.concatenate(create_tree_features(tree, 0, max_depth, [])).reshape((-1, 11))
 
-    obs_data = norm_obs(norm_obs_clip(data[:,:6].flatten()))
+    obs_data = norm_obs_clip(data[:,:6].flatten())
     distances = norm_obs_clip(data[:,6], normalize_to_range=True)
-    agent_data = norm_obs(np.clip(data[:,7:].flatten(), -1, 1))
-    # return np.concatenate((obs_data, distances))
+    agent_data = np.clip(data[:,7:].flatten(), -1, 1)
+    # return np.concatenate((distances, agent_data))
     return np.concatenate((obs_data, distances, agent_data))
