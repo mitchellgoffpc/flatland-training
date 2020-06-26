@@ -14,7 +14,8 @@ from flatland.envs.malfunction_generators import malfunction_from_params, Malfun
 from flatland.utils.rendertools import RenderTool
 
 # from dqn.agent import Agent
-from ppo.agent import Agent
+from ppo.agent import Agent as PPOAgent
+from dqn.agent import Agent as DQNAgent
 from tree_observation import TreeObservation
 from observation_utils import normalize_observation
 
@@ -31,6 +32,7 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
 parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
 parser.add_argument("--num-agents", type=int, default=2, help="Number of agents in each episode")
+parser.add_argument("--agent-algorithm", type=str, default="ppo", help="Algorithm to use for the agents", choices=["ppo", "dqn"])
 parser.add_argument("--tree-depth", type=int, default=2, help="Depth of the observation tree")
 
 # Training parameters
@@ -92,7 +94,11 @@ def main():
     action_size = 5
 
     # Now we load a double dueling DQN agent and initialize it from the checkpoint
-    agent = Agent(state_size, action_size, flags.num_agents)
+    agent_initializers= {
+        "ppo":PPOAgent,
+        "dqn":DQNAgent
+    }
+    agent = agent_initializers[flags.agent_algorithm](state_size, action_size, flags.num_agents)
     if flags.load_from_checkpoint:
           start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
     else: start, eps = 0, 1.0
