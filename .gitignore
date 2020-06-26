@@ -5,3 +5,5 @@ railroads/
 
 venv/
 .venv/
+
+.vscode
