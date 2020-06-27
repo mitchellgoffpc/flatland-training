@@ -12,7 +12,7 @@ BATCH_SIZE = 512
 GAMMA = 0.998
 TAU = 1e-3
 LR = 0.5e-4
-UPDATE_EVERY = 10
+UPDATE_EVERY = 20
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 

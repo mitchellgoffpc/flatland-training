@@ -1,7 +1,8 @@
 import numpy as np
 from tree_observation import ACTIONS
 
-EMPTY_NODE = np.array([0] * 6 + [np.inf] + [0] * 4)
+EMPTY_NODE = np.array([0] * 11) # For Q-Networks
+# EMPTY_NODE = np.array([0] * 6 + [np.inf] + [0] * 4) # For policy networks
 
 
 def norm_obs(obs):

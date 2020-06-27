@@ -30,7 +30,7 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 # Environment parameters
 parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
 parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
-parser.add_argument("--num-agents", type=int, default=1, help="Number of agents in each episode")
+parser.add_argument("--num-agents", type=int, default=2, help="Number of agents in each episode")
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 
 # Training parameters
@@ -163,9 +163,9 @@ def main():
                       rewards[a] = 1
                 elif not done[a] and is_collision(obs[a]):
                       # done['__all__'] = True
-                      rewards[a] = -1
+                      rewards[a] = -5
                       collision = True
-                else: rewards[a] = -.5 # all_rewards[a]
+                else: rewards[a] = -.1 # all_rewards[a]
 
             # Update replay buffer and train agent
             for a in range(flags.num_agents):
