@@ -5,7 +5,7 @@ railroads/
 
 venv/
 .venv/
-.vscode
+.vscode/
 .DS_Store
 
 *.pyc
