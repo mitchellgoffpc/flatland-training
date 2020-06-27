@@ -1,8 +1,11 @@
-checkpoints/ppo/
-checkpoints/dqn/
+checkpoints/ppo/*
+checkpoints/dqn/*
 tensorboard/
 railroads/
 
 venv/
 .venv/
+.vscode
 .DS_Store
+
+*.pyc

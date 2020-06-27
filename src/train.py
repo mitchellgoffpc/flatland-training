@@ -19,11 +19,12 @@ from railway_utils import load_precomputed_railways, create_random_railways
 
 project_root = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description="Train an agent in the flatland environment")
+boolean = lambda x: str(x).lower() == 'true'
 
 # Task parameters
-parser.add_argument("--eval", default=True, dest='train', action='store_false', help="Evaluate the model")
-parser.add_argument("--load-model", default=False, action='store_true', help="Whether to load the model from the last checkpoint")
-parser.add_argument("--load-railways" )
+parser.add_argument("--train", type=boolean, default=True, help="Whether to train the model or just evaluate it")
+parser.add_argument("--load-model", type=boolean, default=False, help="Whether to load the model from the last checkpoint")
+parser.add_argument("--load-railways", type=boolean, default=True, help="Whether to load in pre-generated railway networks")
 parser.add_argument("--report-interval", type=int, default=100, help="Iterations between reports")
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
 
@@ -103,7 +104,8 @@ for _ in range(0, start):
 
 # Helper function to generate a report
 def get_report(show_epsilon=False):
-    return f'\rTraining {flags.num_agents} Agents on ({flags.grid_width},{flags.grid_height}) \t ' + \
+    training = 'Training' if flags.train else 'Evaluating'
+    return f'\r{training} {flags.num_agents} Agents on {flags.grid_width}x{flags.grid_height} map \t ' + \
            f'Episode {episode} \t ' + \
            f'Average Score: {np.mean(scores_window):.3f} \t ' + \
            f'Average Steps Taken: {np.mean(steps_window):.1f} \t ' + \
