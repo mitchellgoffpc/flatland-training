@@ -1,5 +1,5 @@
-checkpoints/ppo/*
-checkpoints/dqn/*
+checkpoints/ppo/model_checkpoint.*
+checkpoints/dqn/model_checkpoint.*
 tensorboard/
 railroads/
 
