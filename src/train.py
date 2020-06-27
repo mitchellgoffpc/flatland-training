@@ -45,7 +45,7 @@ flags = parser.parse_args()
 np.random.seed(1)
 
 # Create a tensorboard SummaryWriter
-summary = SummaryWriter(f'tensorboard_logs/dqn/agents: {flags.num_agents}, tree_depth: {flags.tree_depth}')
+summary = SummaryWriter(f'tensorboard/dqn/agents: {flags.num_agents}, tree_depth: {flags.tree_depth}')
 
 # We need to either load in some pre-generated railways from disk, or else create a random railway generator.
 if flags.load_railways:

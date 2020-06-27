@@ -1,7 +1,8 @@
 checkpoints/ppo/
 checkpoints/dqn/
+tensorboard/
 railroads/
-.DS_Store
 
 venv/
 .venv/
+.DS_Store
