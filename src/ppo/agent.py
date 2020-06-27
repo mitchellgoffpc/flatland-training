@@ -44,18 +44,17 @@ class Agent:
         if self.finished[handle]: return
 
         # Calculate the reward for this step
-        if done and not self.finished[handle]:
+        if done:
               reward = 1
         elif not done and collision:
-              reward = -.5
+              reward = -.2
         else: reward = 0
 
         # Push experience into Episode memory
-        if not self.finished[handle]:
-            self.episodes[handle].push(state, action, reward, next_state, done)
+        self.episodes[handle].push(state, action, reward, next_state, done)
 
         # When we finish the episode, discount rewards and push the experience into replay memory
-        if done and not self.finished[handle]:
+        if done:
             self.episodes[handle].discount_rewards(GAMMA)
             self.memory.push_episode(self.episodes[handle])
             self.episodes[handle].reset()

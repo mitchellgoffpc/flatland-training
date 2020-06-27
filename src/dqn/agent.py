@@ -56,9 +56,9 @@ class Agent:
         if self.finished[handle]: return
 
         # Calculate the reward for this step
-        if done and not self.finished[handle]:
+        if done:
               reward = 1
-        elif not done and collision:
+        elif collision and not done:
               reward = -5
         else: reward = -.1
 

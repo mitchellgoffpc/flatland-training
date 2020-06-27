@@ -62,11 +62,7 @@ env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents
               obs_builder_object=TreeObservation(max_depth=flags.tree_depth))
 
 # After training we want to render the results so we also load a renderer
-env_renderer = RenderTool(env, gl="PILSVG",
-                          agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX,
-                          show_debug=True,
-                          screen_height=1000,
-                          screen_width=1000)
+env_renderer = RenderTool(env, gl="PILSVG", agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX)
 
 # Calculate the state size based on the number of nodes in the tree observation
 num_features_per_node = env.obs_builder.observation_dim
@@ -103,15 +99,17 @@ for _ in range(0, start):
     schedule_generator()
 
 # Helper function to generate a report
-def get_report(show_epsilon=False):
+def get_report(show_time=False):
     training = 'Training' if flags.train else 'Evaluating'
-    return f'\r{training} {flags.num_agents} Agents on {flags.grid_width} x {flags.grid_height} Map \t ' + \
-           f'Episode {episode} \t ' + \
-           f'Average Score: {np.mean(scores_window):.3f} \t ' + \
-           f'Average Steps Taken: {np.mean(steps_window):.1f} \t ' + \
-           f'Collisions: {100 * np.mean(collisions_window):.2f}% \t ' + \
-           f'Finished: {100 * np.mean(done_window):.2f}% \t ' + \
-          (f'Epsilon: {eps:.2f} \t ' if flags.agent_type == "dqn" else '')
+    return '  |  '.join(filter(None, [
+        f'\r{training} {flags.num_agents} Agents on {flags.grid_width} x {flags.grid_height} Map',
+        f'Episode {episode:<5}',
+        f'Average Score: {np.mean(scores_window):.3f}',
+        f'Average Steps Taken: {np.mean(steps_window):<6.1f}',
+        f'Collisions: {100 * np.mean(collisions_window):>5.2f}%',
+        f'Finished: {100 * np.mean(done_window):>6.2f}%',
+        f'Epsilon: {eps:.2f}' if flags.agent_type == "dqn" else None,
+        f'Time taken: {time.time() - start_time:.2f}s' if show_time else None])) + '  '
 
 
 
@@ -153,7 +151,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
         # Update replay buffer and train agent
         for a in range(flags.num_agents):
             finished = done['__all__'] or done[a]
-            if update_values[a] or (finished and not agent.finished[a]):
+            if update_values[a] or finished:
                 if flags.train:
                     agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], agent_obs[a], finished, is_collision(obs[a]))
                 agent_obs_buffer[a] = agent_obs[a].copy()
@@ -180,13 +178,13 @@ for episode in range(start + 1, flags.num_episodes + 1):
     steps_window.append(steps_taken)
 
     # Generate training reports, saving our progress every so often
-    print(f'{get_report()}', end=" ")
+    print(get_report(), end=" ")
     if episode % flags.report_interval == 0:
-        print(f'{get_report()} Time taken: {time.time() - start_time:.2f}s')
-        if flags.train: agent.save(project_root / 'checkpoints', episode, eps)
+        print(get_report(show_time=True))
         start_time = time.time()
+        if flags.train: agent.save(project_root / 'checkpoints', episode, eps)
 
-    # Add to the tensorboard summary
+    # Add stats to the tensorboard summary
     summary.add_scalar('performance/avg_score', np.mean(scores_window), episode)
     summary.add_scalar('performance/avg_steps', np.mean(steps_window), episode)
     summary.add_scalar('performance/completions', np.mean(done_window), episode)
