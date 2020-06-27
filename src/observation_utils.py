@@ -7,7 +7,8 @@ INF_DISTANCE_NODE = np.array([0] * 6 + [np.inf] + [0] * 4) # For policy networks
 
 # Helper function to detect collisions
 def is_collision(obs):
-    return isinstance(obs.childs['L'], float) \
+    return obs is not None \
+       and isinstance(obs.childs['L'], float) \
        and isinstance(obs.childs['R'], float) \
        and obs.childs['F'].dist_other_agent_encountered <= 1 \
        and obs.childs['F'].dist_other_agent_encountered < obs.childs['F'].dist_unusable_switch \

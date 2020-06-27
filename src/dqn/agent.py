@@ -52,17 +52,25 @@ class Agent:
 
     # Record the results of the agent's action and update the model
 
-    def step(self, handle, state, action, reward, next_state, done, train=True):
+    def step(self, handle, state, action, next_state, done, collision):
         if self.finished[handle]: return
+
+        # Calculate the reward for this step
+        if done and not self.finished[handle]:
+              reward = 1
+        elif not done and collision:
+              reward = -5
+        else: reward = -.1
 
         # Save experience in replay memory
         self.memory.push(state, action, reward, next_state, done)
         self.finished[handle] = done
 
-        # Learn every UPDATE_EVERY time steps.
+        # Perform a gradient update every UPDATE_EVERY time steps
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
-        if train and len(self.memory) > BATCH_SIZE and self.t_step == 0:
+        if self.t_step == 0 and len(self.memory) > BATCH_SIZE:
             self.learn(*self.memory.sample(BATCH_SIZE, device))
+
 
     def learn(self, states, actions, rewards, next_states, dones):
         self.qnetwork_local.train()
@@ -89,7 +97,7 @@ class Agent:
             target_param.data.copy_(TAU * local_param.data + (1.0 - TAU) * target_param.data)
 
 
-    # Checkpointing functions
+    # Checkpointing methods
 
     def save(self, path, *data):
         torch.save(self.qnetwork_local.state_dict(), path / 'dqn/model_checkpoint.local')

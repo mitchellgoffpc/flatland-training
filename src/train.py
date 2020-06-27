@@ -35,7 +35,7 @@ parser.add_argument("--num-agents", type=int, default=2, help="Number of agents 
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 
 # Training parameters
-parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
+parser.add_argument("--agent-type", default="ppo", choices=["dqn", "ppo"], help="Which type of RL agent to use")
 parser.add_argument("--num-episodes", type=int, default=10000, help="Number of episodes to train for")
 parser.add_argument("--epsilon-decay", type=float, default=0.997, help="Decay factor for epsilon-greedy exploration")
 
@@ -105,7 +105,7 @@ for _ in range(0, start):
 # Helper function to generate a report
 def get_report(show_epsilon=False):
     training = 'Training' if flags.train else 'Evaluating'
-    return f'\r{training} {flags.num_agents} Agents on {flags.grid_width}x{flags.grid_height} map \t ' + \
+    return f'\r{training} {flags.num_agents} Agents on {flags.grid_width} x {flags.grid_height} Map \t ' + \
            f'Episode {episode} \t ' + \
            f'Average Score: {np.mean(scores_window):.3f} \t ' + \
            f'Average Steps Taken: {np.mean(steps_window):.1f} \t ' + \
@@ -122,7 +122,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     obs, info = env.reset(True, True)
     score, steps_taken, collision = 0, 0, False
 
-    # Build agent specific observations
+    # Build initial observations for each agent
     for a in range(flags.num_agents):
         agent_obs[a] = normalize_observation(obs[a], flags.tree_depth)
         agent_obs_buffer[a] = agent_obs[a].copy()
@@ -141,29 +141,24 @@ for episode in range(start + 1, flags.num_episodes + 1):
             else: action_dict[a] = 0
 
         # Environment step
-        obs, all_rewards, done, info = env.step(action_dict)
-        score += sum(all_rewards.values()) / flags.num_agents
+        obs, rewards, done, info = env.step(action_dict)
+        score += sum(rewards.values()) / flags.num_agents
+
+        # Check for collisions and episode completion
         if step == max_steps - 1:
             done['__all__'] = True
-
-        # Calculate rewards
-        rewards = [0] * flags.num_agents
-        for a in range(flags.num_agents):
-            if done[a] and not agent.finished[a]:
-                  rewards[a] = 1
-            elif not done[a] and is_collision(obs[a]):
-                  # done['__all__'] = True
-                  collision = True
-                  rewards[a] = -5
-            else: rewards[a] = -.1
+        if any(is_collision(obs[a]) for a in obs):
+            collision = True
 
         # Update replay buffer and train agent
         for a in range(flags.num_agents):
             finished = done['__all__'] or done[a]
             if update_values[a] or (finished and not agent.finished[a]):
-                agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], rewards[a], agent_obs[a], finished, flags.train)
+                if flags.train:
+                    agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], agent_obs[a], finished, is_collision(obs[a]))
                 agent_obs_buffer[a] = agent_obs[a].copy()
                 agent_action_buffer[a] = action_dict[a]
+
             if obs[a]:
                 agent_obs[a] = normalize_observation(obs[a], flags.tree_depth)
 
@@ -175,8 +170,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
         if done['__all__']: break
 
     # Epsilon decay
-    if flags.train:
-        eps = max(0.01, flags.epsilon_decay * eps)
+    if flags.train: eps = max(0.01, flags.epsilon_decay * eps)
 
     # Save some training statistics in their respective deques
     tasks_finished = sum(done[i] for i in range(flags.num_agents))
@@ -189,8 +183,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     print(f'{get_report()}', end=" ")
     if episode % flags.report_interval == 0:
         print(f'{get_report()} Time taken: {time.time() - start_time:.2f}s')
-        if flags.train:
-            agent.save(project_root / 'checkpoints', episode, eps)
+        if flags.train: agent.save(project_root / 'checkpoints', episode, eps)
         start_time = time.time()
 
     # Add to the tensorboard summary
