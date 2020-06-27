@@ -1,6 +1,5 @@
 import copy
 import random
-from pathlib import Path
 import pickle
 import torch
 import torch.nn.functional as F
@@ -9,8 +8,8 @@ from dqn.model import QNetwork
 from replay_memory import ReplayBuffer
 
 BUFFER_SIZE = 400_000
-BATCH_SIZE = 1024
-GAMMA = 0.995
+BATCH_SIZE = 512
+GAMMA = 0.998
 TAU = 1e-3
 LR = 0.5e-4
 UPDATE_EVERY = 20
@@ -93,23 +92,19 @@ class Agent:
     # Checkpointing functions
 
     def save(self, path, *data):
-        path = path / 'dqn'
-        Path(path).mkdir(parents=True, exist_ok=True)
-        torch.save(self.qnetwork_local.state_dict(), path / 'model_checkpoint.local')
-        torch.save(self.qnetwork_target.state_dict(), path / 'model_checkpoint.target')
-        torch.save(self.optimizer.state_dict(), path / 'model_checkpoint.optimizer')
-        with open(path / 'model_checkpoint.meta', 'wb') as file:
+        torch.save(self.qnetwork_local.state_dict(), path / 'dqn/model_checkpoint.local')
+        torch.save(self.qnetwork_target.state_dict(), path / 'dqn/model_checkpoint.target')
+        torch.save(self.optimizer.state_dict(), path / 'dqn/model_checkpoint.optimizer')
+        with open(path / 'dqn/model_checkpoint.meta', 'wb') as file:
             pickle.dump(data, file)
 
     def load(self, path, *defaults):
         try:
             print("Loading model from checkpoint...")
-            path = path / 'dqn'
-            Path(path).mkdir(parents=True, exist_ok=True)
-            self.qnetwork_local.load_state_dict(torch.load(path / 'model_checkpoint.local'))
-            self.qnetwork_target.load_state_dict(torch.load(path / 'model_checkpoint.target'))
-            self.optimizer.load_state_dict(torch.load(path / 'model_checkpoint.optimizer'))
-            with open(path / 'model_checkpoint.meta', 'rb') as file:
+            self.qnetwork_local.load_state_dict(torch.load(path / 'dqn/model_checkpoint.local'))
+            self.qnetwork_target.load_state_dict(torch.load(path / 'dqn/model_checkpoint.target'))
+            self.optimizer.load_state_dict(torch.load(path / 'dqn/model_checkpoint.optimizer'))
+            with open(path / 'dqn/model_checkpoint.meta', 'rb') as file:
                 return pickle.load(file)
         except:
             print("No checkpoint file was found")

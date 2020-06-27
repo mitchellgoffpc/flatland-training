@@ -1,6 +1,5 @@
 import pickle
 import random
-from pathlib import Path
 import numpy as np
 import torch
 from torch.distributions.categorical import Categorical
@@ -78,21 +77,17 @@ class Agent:
     # Checkpointing functions
 
     def save(self, path, *data):
-        path = path / 'ppo'
-        Path(path).mkdir(parents=True, exist_ok=True)
-        torch.save(self.policy.state_dict(), path / 'model_checkpoint.policy')
-        torch.save(self.optimizer.state_dict(), path / 'model_checkpoint.optimizer')
-        with open(path / 'model_checkpoint.meta', 'wb') as file:
+        torch.save(self.policy.state_dict(), path / 'ppo/model_checkpoint.policy')
+        torch.save(self.optimizer.state_dict(), path / 'ppo/model_checkpoint.optimizer')
+        with open(path / 'ppo/model_checkpoint.meta', 'wb') as file:
             pickle.dump(data, file)
 
     def load(self, path, *defaults):
         try:
-            path = path / 'ppo'
-            Path(path).mkdir(parents=True, exist_ok=True)
             print("Loading model from checkpoint...")
-            self.policy.load_state_dict(torch.load(path / 'model_checkpoint.policy'))
-            self.optimizer.load_state_dict(torch.load(path / 'model_checkpoint.optimizer'))
-            with open(path / 'model_checkpoint.meta', 'rb') as file:
+            self.policy.load_state_dict(torch.load(path / 'ppo/model_checkpoint.policy'))
+            self.optimizer.load_state_dict(torch.load(path / 'ppo/model_checkpoint.optimizer'))
+            with open(path / 'ppo/model_checkpoint.meta', 'rb') as file:
                 return pickle.load(file)
         except:
             print("No checkpoint file was found")
