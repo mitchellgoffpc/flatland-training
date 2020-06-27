@@ -4,6 +4,7 @@ import argparse
 import numpy as np
 from pathlib import Path
 from collections import deque
+from tensorboardX import SummaryWriter
 
 from flatland.envs.rail_env import RailEnv
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
@@ -42,6 +43,9 @@ flags = parser.parse_args()
 
 # Seeded RNG so we can replicate our results
 np.random.seed(1)
+
+# Create a tensorboard SummaryWriter
+summary = SummaryWriter(f'tensorboard_logs/dqn/agents: {flags.num_agents}, tree_depth: {flags.tree_depth}')
 
 # We need to either load in some pre-generated railways from disk, or else create a random railway generator.
 if flags.load_railways:
@@ -175,9 +179,9 @@ for episode in range(start + 1, flags.num_episodes + 1):
     # Save some training statistics in their respective deques
     tasks_finished = sum(done[i] for i in range(flags.num_agents))
     done_window.append(tasks_finished / max(1, flags.num_agents))
+    collisions_window.append(1. if collision else 0.)
     scores_window.append(score / max_steps)
     steps_window.append(steps_taken)
-    collisions_window.append(1. if collision else 0.)
 
     # Generate training reports, saving our progress every so often
     print(f'{get_report()}', end=" ")
@@ -186,3 +190,9 @@ for episode in range(start + 1, flags.num_episodes + 1):
         if flags.train:
             agent.save(project_root / 'checkpoints', episode, eps)
         start_time = time.time()
+
+    # Add to the tensorboard summary
+    summary.add_scalar('performance/avg_score', np.mean(scores_window), episode)
+    summary.add_scalar('performance/avg_steps', np.mean(steps_window), episode)
+    summary.add_scalar('performance/completions', np.mean(done_window), episode)
+    summary.add_scalar('performance/collisions', np.mean(collisions_window), episode)
