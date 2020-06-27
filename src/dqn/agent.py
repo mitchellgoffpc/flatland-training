@@ -58,7 +58,7 @@ class Agent:
         # Calculate the reward for this step
         if done:
               reward = 1
-        elif collision and not done:
+        elif collision:
               reward = -5
         else: reward = -.1
 

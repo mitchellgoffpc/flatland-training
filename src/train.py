@@ -122,7 +122,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
 
     # Build initial observations for each agent
     for a in range(flags.num_agents):
-        agent_obs[a] = normalize_observation(obs[a], flags.tree_depth)
+        agent_obs[a] = normalize_observation(obs[a], flags.tree_depth, zero_center=flags.agent_type == 'dqn')
         agent_obs_buffer[a] = agent_obs[a].copy()
 
     # Run an episode
@@ -158,7 +158,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
                 agent_action_buffer[a] = action_dict[a]
 
             if obs[a]:
-                agent_obs[a] = normalize_observation(obs[a], flags.tree_depth)
+                agent_obs[a] = normalize_observation(obs[a], flags.tree_depth, zero_center=flags.agent_type == 'dqn')
 
         # Render
         if flags.render_interval and episode % flags.render_interval == 0:
