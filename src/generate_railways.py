@@ -7,24 +7,17 @@ from pathlib import Path
 from flatland.envs.rail_generators import sparse_rail_generator, complex_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator, complex_schedule_generator
 
+from railway_utils import create_random_railways
+
 
 project_root = Path(__file__).resolve().parent.parent
-
-speed_ration_map = {
-    1 / 1:  1.0,   # Fast passenger train
-    1 / 2.: 0.0,   # Fast freight train
-    1 / 3.: 0.0,   # Slow commuter train
-    1 / 4.: 0.0 }  # Slow freight train
-
-rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=2, max_rails_in_city=3, seed=time.time())
-schedule_generator = sparse_schedule_generator(speed_ration_map)
-
-# rail_generator = complex_rail_generator(nr_start_goal=5, nr_extra=5, min_dist=10, max_dist=99999)
-# schedule_generator = complex_schedule_generator()
+rail_generator, schedule_generator = create_random_railways(project_root)
 
 width, height = 50, 50
 n_agents = 3
 
+
+# Load in any existing railways for this map size so we don't overwrite them
 try:
     with open(project_root / f'railroads/rail_networks_{n_agents}x{width}x{height}.pkl', 'rb') as file:
         rail_networks = pickle.load(file)
@@ -35,7 +28,7 @@ except:
     rail_networks, schedules = [], []
 
 
-# Generate 10000 episodes in 100 batches of 100
+# Generate 10000 random railways in 100 batches of 100
 for _ in range(100):
     for i in tqdm(range(100), ncols=120, leave=False):
         map, info = rail_generator(width, height, n_agents, num_resets=0, np_random=np.random)
