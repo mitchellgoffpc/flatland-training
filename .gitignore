@@ -1,4 +1,5 @@
-checkpoints/
+checkpoints/ppo/
+checkpoints/dqn/
 railroads/
 .DS_Store
 
