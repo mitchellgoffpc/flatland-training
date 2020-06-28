@@ -32,6 +32,7 @@ class Agent:
 
 
     # Decide on an action to take in the environment
+
     def act(self, state, eps=None):
         self.policy.eval()
         with torch.no_grad():
@@ -40,25 +41,24 @@ class Agent:
 
 
     # Record the results of the agent's action and update the model
-    def step(self, handle, state, action, next_state, done, collision):
-        if self.finished[handle]: return
 
-        # Calculate the reward for this step
-        if done:
-              reward = 1
-        elif collision:
-              reward = -.2
-        else: reward = 0
+    def step(self, handle, state, action, next_state, agent_done, episode_done, collision):
+        if not self.finished[handle]:
+            if agent_done:
+                  reward = 1
+            elif collision:
+                  reward = -.2
+            else: reward = 0
 
-        # Push experience into Episode memory
-        self.episodes[handle].push(state, action, reward, next_state, done)
+            # Push experience into Episode memory
+            self.episodes[handle].push(state, action, reward, next_state, agent_done or episode_done)
 
-        # When we finish the episode, discount rewards and push the experience into replay memory
-        if done:
-            self.episodes[handle].discount_rewards(GAMMA)
-            self.memory.push_episode(self.episodes[handle])
-            self.episodes[handle].reset()
-            self.finished[handle] = True
+            # When we finish the episode, discount rewards and push the experience into replay memory
+            if agent_done or episode_done:
+                self.episodes[handle].discount_rewards(GAMMA)
+                self.memory.push_episode(self.episodes[handle])
+                self.episodes[handle].reset()
+                self.finished[handle] = True
 
         # Perform a gradient update every UPDATE_EVERY time steps
         self.t_step = (self.t_step + 1) % UPDATE_EVERY

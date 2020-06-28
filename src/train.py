@@ -150,10 +150,8 @@ for episode in range(start + 1, flags.num_episodes + 1):
 
         # Update replay buffer and train agent
         for a in range(flags.num_agents):
-            finished = done['__all__'] or done[a]
-            if update_values[a] or finished:
-                if flags.train:
-                    agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], agent_obs[a], finished, is_collision(obs[a]))
+            if flags.train and (update_values[a] or done[a] or done['__all__']):
+                agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], agent_obs[a], done[a], done['__all__'], is_collision(obs[a]))
                 agent_obs_buffer[a] = agent_obs[a].copy()
                 agent_action_buffer[a] = action_dict[a]
 

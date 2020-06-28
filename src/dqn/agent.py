@@ -52,19 +52,17 @@ class Agent:
 
     # Record the results of the agent's action and update the model
 
-    def step(self, handle, state, action, next_state, done, collision):
-        if self.finished[handle]: return
+    def step(self, handle, state, action, next_state, agent_done, episode_done, collision):
+        if not self.finished[handle]:
+            if agent_done:
+                  reward = 1
+            elif collision:
+                  reward = -5
+            else: reward = -.1
 
-        # Calculate the reward for this step
-        if done:
-              reward = 1
-        elif collision:
-              reward = -5
-        else: reward = -.1
-
-        # Save experience in replay memory
-        self.memory.push(state, action, reward, next_state, done)
-        self.finished[handle] = done
+            # Save experience in replay memory
+            self.memory.push(state, action, reward, next_state, agent_done or episode_done)
+            self.finished[handle] = agent_done or episode_done
 
         # Perform a gradient update every UPDATE_EVERY time steps
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
