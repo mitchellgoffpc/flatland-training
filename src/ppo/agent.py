@@ -10,9 +10,9 @@ from replay_memory import Episode, ReplayBuffer
 BUFFER_SIZE = 32_000
 BATCH_SIZE = 4096
 GAMMA = 0.8
-LR = 0.3e-4
+LR = 0.5e-4
 CLIP_FACTOR = .005
-UPDATE_EVERY = 80
+UPDATE_EVERY = 120
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -47,7 +47,7 @@ class Agent:
             if agent_done:
                   reward = 1
             elif collision:
-                  reward = -.2
+                  reward = -.5
             else: reward = 0
 
             # Push experience into Episode memory

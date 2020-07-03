@@ -7,12 +7,12 @@ import torch.nn.functional as F
 from dqn.model import QNetwork
 from replay_memory import ReplayBuffer
 
-BUFFER_SIZE = 400_000
+BUFFER_SIZE = 500_000
 BATCH_SIZE = 512
 GAMMA = 0.998
 TAU = 1e-3
 LR = 0.5e-4
-UPDATE_EVERY = 20
+UPDATE_EVERY = 40
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -66,7 +66,7 @@ class Agent:
 
         # Perform a gradient update every UPDATE_EVERY time steps
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
-        if self.t_step == 0 and len(self.memory) > BATCH_SIZE:
+        if self.t_step == 0 and len(self.memory) > BATCH_SIZE * 20:
             self.learn(*self.memory.sample(BATCH_SIZE, device))
 
 

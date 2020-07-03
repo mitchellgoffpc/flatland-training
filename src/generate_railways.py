@@ -14,7 +14,7 @@ project_root = Path(__file__).resolve().parent.parent
 rail_generator, schedule_generator = create_random_railways(project_root)
 
 width, height = 50, 50
-n_agents = 3
+n_agents = 5
 
 
 # Load in any existing railways for this map size so we don't overwrite them

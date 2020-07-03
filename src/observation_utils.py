@@ -10,9 +10,10 @@ def is_collision(obs):
     return obs is not None \
        and isinstance(obs.childs['L'], float) \
        and isinstance(obs.childs['R'], float) \
+       and obs.childs['F'].num_agents_opposite_direction > 0 \
        and obs.childs['F'].dist_other_agent_encountered <= 1 \
-       and obs.childs['F'].dist_other_agent_encountered < obs.childs['F'].dist_unusable_switch \
-       and obs.childs['F'].num_agents_opposite_direction > 0
+       and obs.childs['F'].dist_other_agent_encountered < obs.childs['F'].dist_unusable_switch
+       # and obs.childs['F'].dist_other_agent_encountered < obs.childs['F'].dist_to_next_branch
 
 
 # Recursively create numpy arrays for each tree node

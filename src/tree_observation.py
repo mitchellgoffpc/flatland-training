@@ -16,6 +16,13 @@ def first(list):
 def get_action(orientation, direction):
     return ACTIONS[(direction - orientation + 1 + 4) % 4]
 
+def get_direction(orientation, action):
+    if action == 1:
+          return (orientation + 4 - 1) % 4
+    elif action == 3:
+          return (orientation + 1) % 4
+    else: return orientation
+
 
 class RailNode:
     def __init__(self, position, edge_directions, is_target):
@@ -108,27 +115,47 @@ class TreeObservation(ObservationBuilder):
         # Create some lookup tables that we can use later to figure out how far away the agents are from each other.
         for agent in self.env.agents:
             if agent.status == RailAgentStatus.READY_TO_DEPART and agent.initial_position:
-                # This line just replicates a bug in the original TreeObsForRailEnv. Once the bug is fixed,
-                # this check should be removed.
-                if True: # any(a.position == agent.initial_position for a in self.env.agents):
-                    for direction in range(4):
-                        if (*agent.initial_position, direction) in self.graph:
-                            self.nodes_with_departures[(*agent.initial_position, direction)] = 1
+                for direction in range(4):
+                    if (*agent.initial_position, direction) in self.graph:
+                        self.nodes_with_departures[(*agent.initial_position, direction)] = 1
 
-                        for start, _, start_direction, distance in self.edge_positions[(*agent.initial_position, direction)]:
-                            self.edges_with_departures[(*start.position, start_direction)][agent.handle] = distance
+                    for start, _, start_direction, distance in self.edge_positions[(*agent.initial_position, direction)]:
+                        self.edges_with_departures[(*start.position, start_direction)][agent.handle] = distance
 
             if agent.status in [RailAgentStatus.ACTIVE, RailAgentStatus.DONE] and agent.position:
+                agent_key = (*agent.position, agent.direction)
                 for direction in range(4):
+                    # # Check the nodes
                     if (*agent.position, direction) in self.graph:
                         node_dict = self.nodes_with_agents_going if direction == agent.direction else self.nodes_with_agents_coming
                         node_dict[(*agent.position, direction)] = agent.speed_data['speed']
 
-                    edge_dict = self.edges_with_agents_going if direction == agent.direction else self.edges_with_agents_coming
-                    for start, _, start_direction, distance in self.edge_positions[(*agent.position, direction)]:
-                        edge_distance = distance if direction == agent.direction else start.edges[start_direction][1] - distance
-                        edge_dict[(*start.position, start_direction)][agent.handle] = (distance, agent.speed_data['speed'])
+                        # if len(self.graph[agent_key].edges) > 1:
+                        #     exit_direction = get_direction(agent.direction, agent.speed_data['transition_action_on_cellexit'])
+                        #     if agent.speed_data['position_fraction'] == 0 or exit_direction not in self.graph[agent_key].edges: # Agent still has options
+                        #         self.nodes_with_agents_going[(*agent.position, direction)] = agent.speed_data['speed']
+                        #     else: # Agent has already decided
+                        #         coming_direction = (exit_direction + 2) % 4
+                        #         node_dict = self.nodes_with_agents_coming if direction == coming_direction else self.nodes_with_agents_going
+                        #         node_dict[(*agent.position, direction)] = agent.speed_data['speed']
+                        # else:
+                        #     exit_direction = first(self.graph[agent_key].edges.keys())
+                        #     coming_direction = (exit_direction + 2) % 4
+                        #     node_dict = self.nodes_with_agents_coming if direction == coming_direction else self.nodes_with_agents_going
+                        #     node_dict[(*agent.position, direction)] = agent.speed_data['speed']
 
+                    # Check the edges
+                    if agent_key in self.edge_positions:
+                        exit_direction = first(self.get_possible_transitions(agent.position, agent.direction))
+                        coming_direction = (exit_direction + 2) % 4
+                        edge_dict = self.edges_with_agents_coming if direction == coming_direction else self.edges_with_agents_going
+                        if direction == agent.direction or direction == coming_direction:
+                            for start, _, start_direction, distance in self.edge_positions[(*agent.position, direction)]:
+                                edge_distance = distance if direction == agent.direction else start.edges[start_direction][1] - distance
+                                edge_dict[(*start.position, start_direction)][agent.handle] = (distance, agent.speed_data['speed'])
+
+
+                    # Check for malfunctions
                     if agent.malfunction_data['malfunction']:
                         if (*agent.position, direction) in self.graph:
                             self.nodes_with_malfunctions[(*agent.position, direction)] = agent.malfunction_data['malfunction']
@@ -207,7 +234,7 @@ class TreeObservation(ObservationBuilder):
             # Check for other agents on the junctions up ahead
             if next_key in self.nodes_with_agents_going:
                 num_agents_same_direction += 1
-                distance_to_other_agent = min(distance_to_other_agent, edge_length + distance)
+                # distance_to_other_agent = min(distance_to_other_agent, edge_length + distance)
                 min_agent_speed = min(min_agent_speed, self.nodes_with_agents_going[next_key])
 
             if next_key in self.nodes_with_agents_coming:
@@ -224,7 +251,7 @@ class TreeObservation(ObservationBuilder):
                 if dist + d > 0:
                     num_agents_same_direction += 1
                     min_agent_speed = min(min_agent_speed, s)
-                    distance_to_other_agent = min(distance_to_other_agent, edge_length + d)
+                    # distance_to_other_agent = min(distance_to_other_agent, edge_length + d)
 
             for d, _ in self.edges_with_agents_coming[key].values():
                 if dist + d > 0:

@@ -6,7 +6,7 @@ from pathlib import Path
 from collections import deque
 from tensorboardX import SummaryWriter
 
-from flatland.envs.rail_env import RailEnv
+from flatland.envs.rail_env import RailEnv, RailEnvActions
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
 from flatland.utils.rendertools import RenderTool, AgentRenderVariant
 
@@ -23,7 +23,7 @@ boolean = lambda x: str(x).lower() == 'true'
 
 # Task parameters
 parser.add_argument("--train", type=boolean, default=True, help="Whether to train the model or just evaluate it")
-parser.add_argument("--load-model", type=boolean, default=False, help="Whether to load the model from the last checkpoint")
+parser.add_argument("--load-model", default=False, action='store_true', help="Whether to load the model from the last checkpoint")
 parser.add_argument("--load-railways", type=boolean, default=True, help="Whether to load in pre-generated railway networks")
 parser.add_argument("--report-interval", type=int, default=100, help="Iterations between reports")
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
@@ -31,7 +31,7 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 # Environment parameters
 parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
 parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
-parser.add_argument("--num-agents", type=int, default=2, help="Number of agents in each episode")
+parser.add_argument("--num-agents", type=int, default=5, help="Number of agents in each episode")
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 
 # Training parameters
@@ -55,14 +55,14 @@ else: rail_generator, schedule_generator = create_random_railways(project_root)
 
 # Create the Flatland environment
 env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
-              remove_agents_at_target=True,
               rail_generator=rail_generator,
               schedule_generator=schedule_generator,
               malfunction_generator_and_process_data=malfunction_from_params(MalfunctionParameters(1 / 8000, 15, 50)),
-              obs_builder_object=TreeObservation(max_depth=flags.tree_depth))
+              obs_builder_object=TreeObservation(max_depth=flags.tree_depth)
+)
 
 # After training we want to render the results so we also load a renderer
-env_renderer = RenderTool(env, gl="PILSVG", agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX)
+env_renderer = RenderTool(env, gl="PILSVG", screen_width=800, screen_height=800, agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX)
 
 # Calculate the state size based on the number of nodes in the tree observation
 num_features_per_node = env.obs_builder.observation_dim
@@ -97,6 +97,27 @@ if start > 0: print(f"Skipping {start} railways")
 for _ in range(0, start):
     rail_generator()
     schedule_generator()
+
+
+# Helper function to detect collisions
+ACTIONS = { 0: 'B', 1: 'L', 2: 'F', 3: 'R', 4: 'S' }
+
+def is_collision(a):
+    if obs[a] is None: return False
+    is_junction = not isinstance(obs[a].childs['L'], float) or not isinstance(obs[a].childs['R'], float)
+
+    if not is_junction or env.agents[a].speed_data['position_fraction'] > 0:
+          action = ACTIONS[env.agents[a].speed_data['transition_action_on_cellexit']] if is_junction else 'F'
+          return obs[a].childs[action].num_agents_opposite_direction > 0 \
+                 and obs[a].childs[action].dist_other_agent_encountered <= 1 \
+                 and obs[a].childs[action].dist_other_agent_encountered < obs[a].childs[action].dist_unusable_switch
+    else: return False
+
+# Helper function to render the environment
+def render():
+    env_renderer.render_env(show_observations=False)
+    cv2.imshow('Render', cv2.cvtColor(env_renderer.get_image(), cv2.COLOR_BGR2RGB))
+    cv2.waitKey(120)
 
 # Helper function to generate a report
 def get_report(show_time=False):
@@ -145,13 +166,14 @@ for episode in range(start + 1, flags.num_episodes + 1):
         # Check for collisions and episode completion
         if step == max_steps - 1:
             done['__all__'] = True
-        if any(is_collision(obs[a]) for a in obs):
+        if any(is_collision(a) for a in obs):
             collision = True
+            # done['__all__'] = True
 
         # Update replay buffer and train agent
         for a in range(flags.num_agents):
             if flags.train and (update_values[a] or done[a] or done['__all__']):
-                agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], agent_obs[a], done[a], done['__all__'], is_collision(obs[a]))
+                agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], agent_obs[a], done[a], done['__all__'], is_collision(a))
                 agent_obs_buffer[a] = agent_obs[a].copy()
                 agent_action_buffer[a] = action_dict[a]
 
@@ -159,10 +181,11 @@ for episode in range(start + 1, flags.num_episodes + 1):
                 agent_obs[a] = normalize_observation(obs[a], flags.tree_depth, zero_center=flags.agent_type == 'dqn')
 
         # Render
-        if flags.render_interval and episode % flags.render_interval == 0:
-            env_renderer.render_env(show_observations=True)
-            cv2.imshow('Render', cv2.cvtColor(env_renderer.get_image(), cv2.COLOR_BGR2RGB))
-            cv2.waitKey(30)
+        # if flags.render_interval and episode % flags.render_interval == 0:
+        # if collision and all(agent.position for agent in env.agents):
+        #     render()
+        #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
+        #     break
         if done['__all__']: break
 
     # Epsilon decay

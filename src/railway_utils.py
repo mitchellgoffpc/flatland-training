@@ -20,8 +20,8 @@ def load_precomputed_railways(project_root, flags):
 # Helper function to generate railways on the fly
 def create_random_railways(project_root):
     speed_ration_map = {
-        1 / 1:  0.0,   # Fast passenger train
-        1 / 2.: 1.0,   # Fast freight train
+        1 / 1:  1.0,   # Fast passenger train
+        1 / 2.: 0.0,   # Fast freight train
         1 / 3.: 0.0,   # Slow commuter train
         1 / 4.: 0.0 }  # Slow freight train
 
