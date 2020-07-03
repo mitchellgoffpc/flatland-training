@@ -15,7 +15,7 @@ class QNetwork(nn.Module):
         self.fc3_adv = nn.Linear(hidsize2, action_size)
 
     def forward(self, x):
-        x = x.view(x.shape[0], -1)
+        x = x.view(x.shape[0], -1).float()
 
         val = F.relu(self.fc1_val(x))
         val = F.relu(self.fc2_val(val))

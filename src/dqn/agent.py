@@ -5,7 +5,8 @@ import torch
 import torch.nn.functional as F
 
 from dqn.model import QNetwork
-from replay_memory import ReplayBuffer
+# from replay_memory import ReplayBuffer
+from dqn.prioritized_memory import ReplayBuffer
 
 BUFFER_SIZE = 500_000
 BATCH_SIZE = 512
@@ -60,33 +61,44 @@ class Agent:
                   reward = -5
             else: reward = -.1
 
+            # Calculate TD-error for this step
+            # Q_expected = self.qnetwork_local(torch.from_numpy(state).unsqueeze(0))[0,action]
+            # Q_target_next = self.qnetwork_target(torch.from_numpy(next_state).unsqueeze(0)).detach().max(1)[0]
+            # Q_target = reward + GAMMA * Q_target_next * (0 if agent_done or episode_done else 1)
+            # Q_error = Q_expected - Q_target
+
             # Save experience in replay memory
-            self.memory.push(state, action, reward, next_state, agent_done or episode_done)
+            self.memory.push(1., state, action, reward, next_state, agent_done or episode_done)
             self.finished[handle] = agent_done or episode_done
 
         # Perform a gradient update every UPDATE_EVERY time steps
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
-        if self.t_step == 0 and len(self.memory) > BATCH_SIZE * 20:
+        if self.t_step == 0 and len(self.memory) > BATCH_SIZE * 1:
             self.learn(*self.memory.sample(BATCH_SIZE, device))
 
 
-    def learn(self, states, actions, rewards, next_states, dones):
+    def learn(self, states, actions, rewards, next_states, dones, indices, is_weights):
         self.qnetwork_local.train()
 
         # Get expected Q values from local model
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
+        Q_expected = self.qnetwork_local(states).gather(1, actions.unsqueeze(-1)).squeeze()
 
         if self.double_dqn:
               Q_best_action = self.qnetwork_local(next_states).argmax(1)
-              Q_targets_next = self.qnetwork_target(next_states).gather(1, Q_best_action.unsqueeze(-1))
-        else: Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(-1)
+              Q_targets_next = self.qnetwork_target(next_states).gather(1, Q_best_action.unsqueeze(-1)).squeeze()
+        else: Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0]
 
         # Compute Q targets for current states
-        Q_targets = rewards + GAMMA * Q_targets_next * (1 - dones)
+        Q_targets = rewards + GAMMA * Q_targets_next * (1 - dones.int())
+        Q_errors = Q_expected - Q_targets
+
+        # Update prioritized memory
+        for index, error in zip(indices, Q_errors):
+            self.memory.update(index, error)
 
         # Compute loss and perform a gradient step
         self.optimizer.zero_grad()
-        loss = F.mse_loss(Q_expected, Q_targets)
+        loss = torch.mean(is_weights * F.mse_loss(Q_expected, Q_targets))
         loss.backward()
         self.optimizer.step()
 

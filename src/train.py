@@ -25,21 +25,22 @@ boolean = lambda x: str(x).lower() == 'true'
 parser.add_argument("--train", type=boolean, default=True, help="Whether to train the model or just evaluate it")
 parser.add_argument("--load-model", default=False, action='store_true', help="Whether to load the model from the last checkpoint")
 parser.add_argument("--load-railways", type=boolean, default=True, help="Whether to load in pre-generated railway networks")
-parser.add_argument("--report-interval", type=int, default=100, help="Iterations between reports")
+parser.add_argument("--report-interval", type=int, default=20, help="Iterations between reports")
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
 
 # Environment parameters
 parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
 parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
-parser.add_argument("--num-agents", type=int, default=5, help="Number of agents in each episode")
+parser.add_argument("--num-agents", type=int, default=3, help="Number of agents in each episode")
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 
 # Training parameters
 parser.add_argument("--agent-type", default="ppo", choices=["dqn", "ppo"], help="Which type of RL agent to use")
-parser.add_argument("--num-episodes", type=int, default=10000, help="Number of episodes to train for")
+parser.add_argument("--num-episodes", type=int, default=10, help="Number of episodes to train for")
 parser.add_argument("--epsilon-decay", type=float, default=0.997, help="Decay factor for epsilon-greedy exploration")
 
 flags = parser.parse_args()
+
 
 
 # Seeded RNG so we can replicate our results
@@ -53,13 +54,13 @@ if flags.load_railways:
       rail_generator, schedule_generator = load_precomputed_railways(project_root, flags)
 else: rail_generator, schedule_generator = create_random_railways(project_root)
 
+
 # Create the Flatland environment
 env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
               rail_generator=rail_generator,
               schedule_generator=schedule_generator,
               malfunction_generator_and_process_data=malfunction_from_params(MalfunctionParameters(1 / 8000, 15, 50)),
-              obs_builder_object=TreeObservation(max_depth=flags.tree_depth)
-)
+              obs_builder_object=TreeObservation(max_depth=flags.tree_depth))
 
 # After training we want to render the results so we also load a renderer
 env_renderer = RenderTool(env, gl="PILSVG", screen_width=800, screen_height=800, agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX)
@@ -99,6 +100,7 @@ for _ in range(0, start):
     schedule_generator()
 
 
+
 # Helper function to detect collisions
 ACTIONS = { 0: 'B', 1: 'L', 2: 'F', 3: 'R', 4: 'S' }
 
@@ -130,6 +132,7 @@ def get_report(show_time=False):
         f'Collisions: {100 * np.mean(collisions_window):>5.2f}%',
         f'Finished: {100 * np.mean(done_window):>6.2f}%',
         f'Epsilon: {eps:.2f}' if flags.agent_type == "dqn" else None,
+        f'Beta: {agent.memory.beta:.2f}' if flags.agent_type == "dqn" else None,
         f'Time taken: {time.time() - start_time:.2f}s' if show_time else None])) + '  '
 
 
