@@ -1,8 +1,8 @@
-import torch
 import random
-import numpy as np
 from collections import namedtuple, deque, Iterable
 
+import numpy as np
+import torch
 
 Transition = namedtuple("Experience", ("state", "action", "reward", "next_state", "done"))
 
@@ -28,7 +28,7 @@ class ReplayBuffer:
         self.memory = deque(maxlen=buffer_size)
 
     def push(self, state, action, reward, next_state, done):
-        self.memory.append(Transition(np.expand_dims(state, 0), action, reward, np.expand_dims(next_state, 0), done))
+        self.memory.append(Transition(state.unsqueeze(0), action, reward, next_state.unsqueeze(0), done))
 
     def push_episode(self, episode):
         for step in episode.memory:
@@ -37,17 +37,21 @@ class ReplayBuffer:
     def sample(self, batch_size, device):
         experiences = random.sample(self.memory, k=batch_size)
 
-        states      = torch.from_numpy(self.stack([e.state      for e in experiences])).float().to(device)
-        actions     = torch.from_numpy(self.stack([e.action     for e in experiences])).long().to(device)
-        rewards     = torch.from_numpy(self.stack([e.reward     for e in experiences])).float().to(device)
-        next_states = torch.from_numpy(self.stack([e.next_state for e in experiences])).float().to(device)
-        dones       = torch.from_numpy(self.stack([e.done       for e in experiences]).astype(np.uint8)).float().to(device)
+        states = self.stack([e.state for e in experiences]).float().to(device)
+        actions = self.stack([e.action for e in experiences]).long().to(device)
+        rewards = self.stack([e.reward for e in experiences]).float().to(device)
+        next_states = self.stack([e.next_state for e in experiences]).float().to(device)
+        dones = self.stack([e.done for e in experiences]).float().to(device)
 
         return states, actions, rewards, next_states, dones
 
     def stack(self, states):
-        sub_dims = states[0].shape[1:] if isinstance(states[0], Iterable) else [1]
-        return np.reshape(np.array(states), (len(states), *sub_dims))
+        return (torch.stack(states, 0)
+                if isinstance(states[0], torch.Tensor)
+                else torch.tensor(states).view(len(states),
+                                               *(states[0].shape[1:]
+                                                 if isinstance(states[0], Iterable)
+                                                 else [1])))
 
     def __len__(self):
         return len(self.memory)

@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 try:
     from .tree_observation import ACTIONS
@@ -35,19 +36,29 @@ def create_tree_features(node, current_depth, max_depth, empty_node, data):
     return data
 
 
-# Normalize an observation to [0, 1] and then clip it to get rid of any infinite-valued features
-def norm_obs_clip(obs, clip_min=-1, clip_max=1, fixed_radius=0, normalize_to_range=False):
-    if fixed_radius > 0:
-        max_obs = fixed_radius
-    else:
-        max_obs = np.max(obs[np.where(obs < 1000)], initial=1) + 1
+TRUE = torch.ones(1)
+FALSE = torch.zeros(1)
 
-    min_obs = np.min(obs[np.where(obs >= 0)], initial=max_obs) if normalize_to_range else 0
+
+# Normalize an observation to [0, 1] and then clip it to get rid of any infinite-valued features
+#@torch.jit.script
+def norm_obs_clip(obs, normalize_to_range):
+    max_obs = obs[obs < 1000].max()
+    max_obs.clamp_(min=1)
+    max_obs.add_(1)
+
+    min_obs = torch.zeros(1)[0]
+
+    if normalize_to_range.item():
+        min_obs.add_(obs[obs >= 0].min().clamp(max=max_obs.item()))
 
     if max_obs == min_obs:
-        return np.clip(obs / max_obs, clip_min, clip_max)
+        obs.div_(max_obs)
     else:
-        return np.clip((obs - min_obs) / np.abs(max_obs - min_obs), clip_min, clip_max)
+        obs.sub_(min_obs)
+        max_obs.sub_(min_obs)
+        obs.div_(max_obs)
+    return obs
 
 
 # Normalize a tree observation
@@ -56,12 +67,14 @@ def normalize_observation(tree, max_depth, zero_center=True):
     data = np.concatenate([create_tree_features(t, 0, max_depth, empty_node, []) for t in tree.values()]
                           if isinstance(tree, dict) else
                           create_tree_features(tree, 0, max_depth, empty_node, [])).reshape((-1, 11))
+    data = torch.as_tensor(data).float()
 
-    obs_data = norm_obs_clip(data[:, :6].flatten())
-    distances = norm_obs_clip(data[:, 6], normalize_to_range=True)
-    agent_data = np.clip(data[:, 7:].flatten(), -1, 1)
+    norm_obs_clip(data[:, :6], FALSE)
+    norm_obs_clip(data[:, 6], TRUE)
+    data.clamp_(-1, 1)
 
     if zero_center:
-        return np.concatenate((obs_data - obs_data.mean(), distances, agent_data - agent_data.mean()))
-    else:
-        return np.concatenate((obs_data, distances, agent_data))
+        data[:, :6].sub_(data[:, :6].mean())
+        data[:, 7:].sub_(data[:, 7:].mean())
+
+    return data.view(-1)

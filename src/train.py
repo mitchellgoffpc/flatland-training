@@ -5,18 +5,19 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import torch
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
 from flatland.envs.rail_env import RailEnv
 from flatland.utils.rendertools import RenderTool, AgentRenderVariant
 from tensorboardX import SummaryWriter
 
 try:
-    from .agent import Agent as DQN_Agent
+    from .agent import Agent as DQN_Agent, device, BATCH_SIZE
     from .tree_observation import TreeObservation
     from .observation_utils import normalize_observation, is_collision
     from .railway_utils import load_precomputed_railways, create_random_railways
 except:
-    from agent import Agent as DQN_Agent
+    from agent import Agent as DQN_Agent, device, BATCH_SIZE
     from tree_observation import TreeObservation
     from observation_utils import normalize_observation, is_collision
     from railway_utils import load_precomputed_railways, create_random_railways
@@ -44,8 +45,8 @@ parser.add_argument("--hidden-factor", type=int, default=15, help="Depth of the 
 
 # Training parameters
 parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
-parser.add_argument("--num-episodes", type=int, default=10**6, help="Number of episodes to train for")
-parser.add_argument("--epsilon-decay", type=float, default=0.999, help="Decay factor for epsilon-greedy exploration")
+parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of episodes to train for")
+parser.add_argument("--epsilon-decay", type=float, default=0, help="Decay factor for epsilon-greedy exploration")
 parser.add_argument("--step-reward", type=float, default=-1e-2, help="Depth of the observation tree")
 
 flags = parser.parse_args()
@@ -121,6 +122,7 @@ def get_means(x, y, c, s):
     return (x * 3 + c) / 4, (y * (s - 1) + c) / s
 
 
+
 episode = 0
 
 # Main training loop
@@ -165,9 +167,15 @@ for episode in range(start + 1, flags.num_episodes + 1):
         # Update replay buffer and train agent
         for a in range(agent_count):
             if flags.train and (update_values[a] or done[a] or done['__all__']):
-                agent.step(a, agent_obs_buffer[a], agent_action_buffer[a], agent_obs[a], done[a], done['__all__'],
-                           is_collision(a), flags.step_reward)
-                agent_obs_buffer[a] = agent_obs[a].copy()
+                agent.step(a,
+                           agent_obs_buffer[a],
+                           agent_action_buffer[a],
+                           agent_obs[a],
+                           done[a],
+                           done['__all__'],
+                           is_collision(a),
+                           flags.step_reward)
+                agent_obs_buffer[a] = agent_obs[a].clone()
                 agent_action_buffer[a] = action_dict[a]
 
             if obs[a]:

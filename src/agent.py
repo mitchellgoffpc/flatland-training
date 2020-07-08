@@ -19,7 +19,7 @@ BATCH_SIZE = 512
 GAMMA = 0.998
 TAU = 1e-3
 LR = 3e-5
-UPDATE_EVERY = 200
+UPDATE_EVERY = 1
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -44,10 +44,10 @@ class Agent:
     # Decide on an action to take in the environment
 
     def act(self, state, eps=0.):
-        state = torch.from_numpy(state).float().unsqueeze(0).to(device)
+        state = state.unsqueeze(0).to(device)
         self.qnetwork_local.eval()
         with torch.no_grad():
-            action_values = self.qnetwork_local(state)
+            action_values = self.qnetwork_local(state)[0]
 
         # Epsilon-greedy action selection
         if random.random() > eps:
@@ -79,13 +79,11 @@ class Agent:
         self.qnetwork_local.train()
 
         # Get expected Q values from local model
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
+        Q_expected =  self.qnetwork_local(states)
+        Q_expected = Q_expected.gather(1, actions)
 
-        if self.double_dqn:
-            Q_best_action = self.qnetwork_local(next_states).argmax(1)
-            Q_targets_next = self.qnetwork_target(next_states).gather(1, Q_best_action.unsqueeze(-1))
-        else:
-            Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(-1)
+        Q_best_action = self.qnetwork_local(next_states).argmax(1)
+        Q_targets_next = self.qnetwork_target(next_states).gather(1, Q_best_action.unsqueeze(-1))
 
         # Compute Q targets for current states
         Q_targets = rewards + GAMMA * Q_targets_next * (1 - dones)
