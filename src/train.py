@@ -5,7 +5,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import torch
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
 from flatland.envs.rail_env import RailEnv
 from flatland.utils.rendertools import RenderTool, AgentRenderVariant
@@ -42,6 +41,7 @@ parser.add_argument("--num-agents", type=int, default=5, help="Number of agents 
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--model-depth", type=int, default=4, help="Depth of the observation tree")
 parser.add_argument("--hidden-factor", type=int, default=15, help="Depth of the observation tree")
+parser.add_argument("--kernel-size", type=int, default=7, help="Depth of the observation tree")
 
 # Training parameters
 parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
@@ -62,7 +62,7 @@ num_nodes = sum(np.power(4, i) for i in range(flags.tree_depth + 1))
 state_size = num_nodes * num_features_per_node
 action_size = 5
 # Load an RL agent and initialize it from checkpoint if necessary
-agent = DQN_Agent(state_size, action_size, flags.num_agents, flags.model_depth, flags.hidden_factor)
+agent = DQN_Agent(state_size, action_size, flags.num_agents, flags.model_depth, flags.hidden_factor, flags.kernel_size)
 if flags.load_model:
     start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
 else:
@@ -122,7 +122,6 @@ def get_means(x, y, c, s):
     return (x * 3 + c) / 4, (y * (s - 1) + c) / s
 
 
-
 episode = 0
 
 # Main training loop
@@ -144,14 +143,18 @@ for episode in range(start + 1, flags.num_episodes + 1):
         update_values = [False] * agent_count
         action_dict = {}
 
-        for a in range(agent_count):
-            if info['action_required'][a]:
-                action_dict[a] = agent.act(agent_obs[a], eps=eps)
+        if any(info['action_required']):
+            ret_action = agent.act(agent_obs, eps=eps)
+        else:
+            ret_action = update_values
+        for idx, act in enumerate(ret_action):
+            if info['action_required'][idx]:
+                action_dict[idx] = act
                 # action_dict[a] = np.random.randint(5)
-                update_values[a] = True
+                update_values[idx] = True
                 steps_taken += 1
             else:
-                action_dict[a] = 0
+                action_dict[idx] = 0
 
         # Environment step
         obs, rewards, done, info = env.step(action_dict)
@@ -165,29 +168,30 @@ for episode in range(start + 1, flags.num_episodes + 1):
             # done['__all__'] = True
 
         # Update replay buffer and train agent
-        for a in range(agent_count):
-            if flags.train and (update_values[a] or done[a] or done['__all__']):
-                agent.step(a,
-                           agent_obs_buffer[a],
-                           agent_action_buffer[a],
-                           agent_obs[a],
-                           done[a],
-                           done['__all__'],
-                           is_collision(a),
-                           flags.step_reward)
-                agent_obs_buffer[a] = agent_obs[a].clone()
-                agent_action_buffer[a] = action_dict[a]
+        if flags.train and (any(update_values) or any(done) or done['__all__']):
+            agent.step(agent_obs_buffer,
+                       agent_action_buffer,
+                       agent_obs,
+                       done,
+                       done['__all__'],
+                       [is_collision(a) for a in range(agent_count)],
+                       flags.step_reward)
+            agent_obs_buffer = [o.clone() for o in agent_obs]
+            for key, value in action_dict.items():
+                agent_action_buffer[key] = value
 
+        for a in range(agent_count):
             if obs[a]:
                 agent_obs[a] = normalize_observation(obs[a], flags.tree_depth, zero_center=True)
 
-        # Render
-        # if flags.render_interval and episode % flags.render_interval == 0:
-        # if collision and all(agent.position for agent in env.agents):
-        #     render()
-        #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
-        #     break
-        if done['__all__']: break
+    # Render
+    # if flags.render_interval and episode % flags.render_interval == 0:
+    # if collision and all(agent.position for agent in env.agents):
+    #     render()
+    #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
+    #     break
+        if done['__all__']:
+            break
 
     # Epsilon decay
     if flags.train:

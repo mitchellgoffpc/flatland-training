@@ -25,12 +25,11 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class Agent:
-    def __init__(self, state_size, action_size, num_agents, model_depth, hidden_factor, double_dqn=True):
+    def __init__(self, state_size, action_size, num_agents, model_depth, hidden_factor, kernel_size=7):
         self.action_size = action_size
-        self.double_dqn = double_dqn
 
         # Q-Network
-        self.qnetwork_local = QNetwork(state_size, action_size, hidden_factor, model_depth).to(device)
+        self.qnetwork_local = QNetwork(state_size, action_size, hidden_factor, model_depth, kernel_size).to(device)
         self.qnetwork_target = copy.deepcopy(self.qnetwork_local)
         self.optimizer = Optimizer(self.qnetwork_local.parameters(), lr=LR, weight_decay=1e-2)
 
@@ -39,26 +38,27 @@ class Agent:
         self.t_step = 0
 
     def reset(self):
-        self.finished = [False] * 40  # Up to 40 agents used
+        self.finished = False
 
     # Decide on an action to take in the environment
 
     def act(self, state, eps=0.):
-        state = state.unsqueeze(0).to(device)
+        agent_count = len(state)
+        state = torch.stack(state, -1).unsqueeze(0).to(device)
         self.qnetwork_local.eval()
         with torch.no_grad():
-            action_values = self.qnetwork_local(state)[0]
+            action_values = self.qnetwork_local(state)
 
         # Epsilon-greedy action selection
-        if random.random() > eps:
-            return torch.argmax(action_values).item()
-        else:
-            return torch.randint(self.action_size, ()).item()
+        return [torch.argmax(action_values[:, :, i], 1).item()
+                if random.random() > eps
+                else torch.randint(self.action_size, ()).item()
+                for i in range(agent_count)]
 
     # Record the results of the agent's action and update the model
 
-    def step(self, handle, state, action, next_state, agent_done, episode_done, collision, step_reward=-1):
-        if not self.finished[handle]:
+    def step(self, state, action, next_state, agent_done, episode_done, collision, step_reward=-1):
+        if not self.finished:
             if agent_done:
                 reward = 1
             elif collision:
@@ -68,7 +68,7 @@ class Agent:
 
             # Save experience in replay memory
             self.memory.push(state, action, reward, next_state, agent_done or episode_done)
-            self.finished[handle] = agent_done or episode_done
+            self.finished = episode_done
 
         # Perform a gradient update every UPDATE_EVERY time steps
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
@@ -78,15 +78,16 @@ class Agent:
     def learn(self, states, actions, rewards, next_states, dones):
         self.qnetwork_local.train()
 
-        # Get expected Q values from local model
-        Q_expected =  self.qnetwork_local(states)
-        Q_expected = Q_expected.gather(1, actions)
 
-        Q_best_action = self.qnetwork_local(next_states).argmax(1)
-        Q_targets_next = self.qnetwork_target(next_states).gather(1, Q_best_action.unsqueeze(-1))
+        # Get expected Q values from local model
+        Q_expected = self.qnetwork_local(states.squeeze(1))
+
+        Q_expected = Q_expected.gather(1, actions.unsqueeze(1))
+        Q_best_action = self.qnetwork_local(next_states.squeeze(1)).argmax(1)
+        Q_targets_next = self.qnetwork_target(next_states.squeeze(1)).gather(1, Q_best_action.unsqueeze(1))
 
         # Compute Q targets for current states
-        Q_targets = rewards + GAMMA * Q_targets_next * (1 - dones)
+        Q_targets = rewards.unsqueeze(-1) + GAMMA * Q_targets_next * (1 - dones.unsqueeze(-1))
 
         # Compute loss and perform a gradient step
         self.optimizer.zero_grad()

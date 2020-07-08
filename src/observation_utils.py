@@ -77,4 +77,4 @@ def normalize_observation(tree, max_depth, zero_center=True):
         data[:, :6].sub_(data[:, :6].mean())
         data[:, 7:].sub_(data[:, 7:].mean())
 
-    return data.view(-1)
+    return data.flatten()

@@ -1,7 +1,6 @@
 import random
 from collections import namedtuple, deque, Iterable
 
-import numpy as np
 import torch
 
 Transition = namedtuple("Experience", ("state", "action", "reward", "next_state", "done"))
@@ -28,7 +27,11 @@ class ReplayBuffer:
         self.memory = deque(maxlen=buffer_size)
 
     def push(self, state, action, reward, next_state, done):
-        self.memory.append(Transition(state.unsqueeze(0), action, reward, next_state.unsqueeze(0), done))
+        self.memory.append(Transition(torch.stack(state, -1).unsqueeze(0),
+                                      action,
+                                      reward,
+                                      torch.stack(next_state, -1).unsqueeze(0),
+                                      done))
 
     def push_episode(self, episode):
         for step in episode.memory:
@@ -41,17 +44,18 @@ class ReplayBuffer:
         actions = self.stack([e.action for e in experiences]).long().to(device)
         rewards = self.stack([e.reward for e in experiences]).float().to(device)
         next_states = self.stack([e.next_state for e in experiences]).float().to(device)
-        dones = self.stack([e.done for e in experiences]).float().to(device)
+        dones = self.stack([list(e.done.values()) for e in experiences]).float().to(device)
 
         return states, actions, rewards, next_states, dones
 
-    def stack(self, states):
-        return (torch.stack(states, 0)
-                if isinstance(states[0], torch.Tensor)
-                else torch.tensor(states).view(len(states),
-                                               *(states[0].shape[1:]
-                                                 if isinstance(states[0], Iterable)
-                                                 else [1])))
+    def stack(self, states, dim=0):
+        if isinstance(states[0], Iterable):
+            if isinstance(states[0][0], list):
+                return torch.stack([self.stack(st, -1) for st in states], dim)
+            if isinstance(states[0], torch.Tensor):
+                return torch.stack(states, 0)
+            return torch.tensor(states)
+        return torch.tensor(states).view(len(states), 1)
 
     def __len__(self):
         return len(self.memory)
