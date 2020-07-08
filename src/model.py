@@ -81,7 +81,7 @@ def try_norm(tensor, norm):
 
 class Block(torch.nn.Module):
     def __init__(self, hidden_size, output_size, bias=False, cat=True, init_norm=False, out_norm=True,
-                 kernel_size=7):
+                 kernel_size=7, squeeze_heads=4):
         super().__init__()
         self.residual = hidden_size == output_size
         self.cat = cat
@@ -90,14 +90,57 @@ class Block(torch.nn.Module):
         self.linr = SeparableConvolution(hidden_size, output_size, kernel_size, padding=kernel_size // 2, bias=bias)
         self.out_norm = torch.nn.BatchNorm1d(output_size) if out_norm else None
 
+        self.use_squeeze_attention = squeeze_heads > 0
+
+        if self.use_squeeze_attention:
+            self.squeeze_heads = squeeze_heads
+            self.exc_input_norm = torch.nn.BatchNorm1d(squeeze_heads)
+            self.expert_ranker = torch.nn.Linear(output_size, squeeze_heads, False)
+            self.excitation_conv = SeparableConvolution(output_size, squeeze_heads, kernel_size,
+                                                        padding=kernel_size // 2)
+            self.linear_in_norm = torch.nn.BatchNorm1d(output_size * squeeze_heads)
+            self.linear0 = torch.nn.Linear(output_size * squeeze_heads, output_size, False)
+            self.exc_norm = torch.nn.BatchNorm1d(output_size)
+            self.linear1 = torch.nn.Linear(output_size, output_size)
+
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
+        batch = fn_input.size(0)
         fn_input = try_norm(fn_input, self.init_norm)
         out = self.linr(fn_input)
         out = try_norm(out, self.out_norm)
+
+        if self.use_squeeze_attention:
+            exc = self.excitation_conv(out)
+            exc = torch.nn.functional.softmax(exc, 2)
+            exc = exc.unsqueeze(-1).transpose(1, -1)
+            exc = (out.unsqueeze(-1) * exc).sum(2)
+
+            # Rank experts (heads)
+            hds = exc.view(batch, self.squeeze_heads, -1)
+            exc = self.exc_input_norm(hds)
+            exc = self.expert_ranker(mish(exc))
+            exc = exc.softmax(-1)
+            exc = exc.bmm(hds)
+            exc = exc.view(batch, -1, 1)
+
+            # Fully-connected block
+            nrm = self.linear_in_norm(exc).squeeze(-1)
+            nrm = self.linear0(nrm).unsqueeze(-1)
+            nrm = self.exc_norm(nrm)
+            act = mish(nrm.squeeze(-1))
+            exc = self.linear1(act).tanh()
+            exc = exc.unsqueeze(-1)
+            exc = exc.expand_as(out)
+
+            # Merge
+            out = out * exc
+
         if self.cat:
             return torch.cat([out, fn_input], 1)
+
         if self.residual:
             return out + fn_input
+
         return out
 
 
@@ -148,7 +191,7 @@ class Block(torch.nn.Module):
 
 
 class QNetwork(torch.nn.Module):
-    def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, cat=True):
+    def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=True):
         """
         11 input features, state_size//11 = item_count
         :param state_size:
@@ -168,14 +211,16 @@ class QNetwork(torch.nn.Module):
                                            out_features,
                                            cat=True,
                                            init_norm=not i,
-                                           kernel_size=kernel_size)
+                                           kernel_size=kernel_size,
+                                           squeeze_heads=squeeze_heads)
                                      for i in range(depth)],
                                    Block(out_features + out_features * depth * cat, action_size,
                                          bias=True,
                                          cat=False,
                                          out_norm=False,
                                          init_norm=False,
-                                         kernel_size=kernel_size)])
+                                         kernel_size=kernel_size,
+                                         squeeze_heads=squeeze_heads)])
 
         def init(module: torch.nn.Module):
             if hasattr(module, "weight") and hasattr(module.weight, "data"):

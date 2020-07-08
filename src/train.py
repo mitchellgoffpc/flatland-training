@@ -41,7 +41,8 @@ parser.add_argument("--num-agents", type=int, default=5, help="Number of agents 
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--model-depth", type=int, default=4, help="Depth of the observation tree")
 parser.add_argument("--hidden-factor", type=int, default=15, help="Depth of the observation tree")
-parser.add_argument("--kernel-size", type=int, default=7, help="Depth of the observation tree")
+parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
+parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the observation tree")
 
 # Training parameters
 parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
@@ -62,7 +63,13 @@ num_nodes = sum(np.power(4, i) for i in range(flags.tree_depth + 1))
 state_size = num_nodes * num_features_per_node
 action_size = 5
 # Load an RL agent and initialize it from checkpoint if necessary
-agent = DQN_Agent(state_size, action_size, flags.num_agents, flags.model_depth, flags.hidden_factor, flags.kernel_size)
+agent = DQN_Agent(state_size,
+                  action_size,
+                  flags.num_agents,
+                  flags.model_depth,
+                  flags.hidden_factor,
+                  flags.kernel_size,
+                  flags.squeeze_heads)
 if flags.load_model:
     start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
 else:

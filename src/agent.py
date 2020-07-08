@@ -19,17 +19,22 @@ BATCH_SIZE = 512
 GAMMA = 0.998
 TAU = 1e-3
 LR = 3e-5
-UPDATE_EVERY = 1
+UPDATE_EVERY = 160
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class Agent:
-    def __init__(self, state_size, action_size, num_agents, model_depth, hidden_factor, kernel_size=7):
+    def __init__(self, state_size, action_size, num_agents, model_depth, hidden_factor, kernel_size, squeeze_heads):
         self.action_size = action_size
 
         # Q-Network
-        self.qnetwork_local = QNetwork(state_size, action_size, hidden_factor, model_depth, kernel_size).to(device)
+        self.qnetwork_local = QNetwork(state_size,
+                                       action_size,
+                                       hidden_factor,
+                                       model_depth,
+                                       kernel_size,
+                                       squeeze_heads).to(device)
         self.qnetwork_target = copy.deepcopy(self.qnetwork_local)
         self.optimizer = Optimizer(self.qnetwork_local.parameters(), lr=LR, weight_decay=1e-2)
 

@@ -43,7 +43,7 @@ class Generator:
 # Helper function to load in precomputed railway networks
 def load_precomputed_railways(project_root, start_index):
     prefix = os.path.join(project_root, 'railroads')
-    suffix = f'_3x30x30.pkl'
+    suffix = f'_sum.pkl'
     sched = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
     rail = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
     print(f"Working on {len(rail)} tracks")
