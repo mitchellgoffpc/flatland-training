@@ -76,5 +76,4 @@ def normalize_observation(tree, max_depth, zero_center=True):
     if zero_center:
         data[:, :6].sub_(data[:, :6].mean())
         data[:, 7:].sub_(data[:, 7:].mean())
-
     return data.flatten()

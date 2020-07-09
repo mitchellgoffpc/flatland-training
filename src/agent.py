@@ -13,7 +13,7 @@ except:
 import os
 
 BUFFER_SIZE = 500_000
-BATCH_SIZE = 256
+BATCH_SIZE = 64
 GAMMA = 0.998
 TAU = 1e-3
 LR = 2e-4
@@ -48,7 +48,7 @@ class Agent:
         self.optimizer = Optimizer(self.qnetwork_local.parameters(), lr=LR, weight_decay=1e-2)
 
         # Replay memory
-        self.memory = ReplayBuffer(BUFFER_SIZE)
+        self.memory = ReplayBuffer(BATCH_SIZE)
         self.t_step = 0
 
     def reset(self):
@@ -59,6 +59,7 @@ class Agent:
     def act(self, state, eps=0.):
         agent_count = len(state)
         state = torch.stack(state, -1).unsqueeze(0).to(device)
+        state = torch.cat([state, torch.randn(1, 1, state.size(-1), device=device)], 1)
         self.qnetwork_local.eval()
         with torch.no_grad():
             action_values = self.qnetwork_local(state)
@@ -71,13 +72,15 @@ class Agent:
 
     def multi_act(self, states, eps=0.):
         agent_count = len(states[0])
-        state = torch.stack([torch.stack(state, -1) for state in states], 0).to(device)
+        state = torch.stack([torch.stack(state, -1) if len(state) > 1 else state.unsqueeze(-1)
+                             for state in states], 0).to(device)
+        state = torch.cat([state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
         self.qnetwork_local.eval()
         with torch.no_grad():
             action_values = self.qnetwork_local(state)
 
         # Epsilon-greedy action selection
-        return [[torch.argmax(act[:, :, i], 1).item()
+        return [[torch.argmax(act[:, i], 0).item()
                  if random.random() > eps
                  else torch.randint(self.action_size, ()).item()
                  for i in range(agent_count)]
@@ -86,25 +89,24 @@ class Agent:
     # Record the results of the agent's action and update the model
 
     def step(self, state, action, next_state, agent_done, episode_done, collision, step_reward=-1):
-        if not self.finished:
-            if agent_done:
-                reward = 1
-            elif collision:
-                reward = -5
-            else:
-                reward = step_reward
-
-            # Save experience in replay memory
-            self.memory.push(state, action, reward, next_state, agent_done or episode_done)
-            self.finished = episode_done
-
-        # Perform a gradient update every UPDATE_EVERY time steps
-        # self.t_step = (self.t_step + 1) % UPDATE_EVERY
-        if len(self.memory) > BATCH_SIZE * 20:
-            self.learn(*self.memory.sample(BATCH_SIZE, device))
+        state = self.memory.stack(state).to(device).transpose(1, 2)
+        action = self.memory.stack(action).to(device)
+        reward = self.memory.stack([1 if ad
+                                    else (c - 5 if collision else step_reward)
+                                    for ad, c in zip(agent_done, collision)]).to(device)
+        next_state = self.memory.stack(next_state).to(device).transpose(1, 2)
+        dones = self.memory.stack([[v or episode_done for k, v in a.items()
+                                    if not hasattr(k, 'startswith')
+                                    or not k.startswith('_')] for a in agent_done]).to(device).float()
+        state = torch.cat([state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
+        next_state = torch.cat([next_state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
+        self.learn(state, action, reward, next_state, dones)
 
     def learn(self, states, actions, rewards, next_states, dones):
         self.qnetwork_local.train()
+
+        actions.squeeze_(-1)
+        dones.squeeze_(-1)
 
         # Get expected Q values from local model
         Q_expected = self.qnetwork_local(states.squeeze(1))

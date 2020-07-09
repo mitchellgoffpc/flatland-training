@@ -3,12 +3,10 @@ import copy
 import time
 from pathlib import Path
 
-import cv2
 import numpy as np
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
-from flatland.envs.rail_env import RailEnv
 from flatland.envs.observations import GlobalObsForRailEnv
-from flatland.utils.rendertools import RenderTool, AgentRenderVariant
+from flatland.envs.rail_env import RailEnv
 from tensorboardX import SummaryWriter
 
 try:
@@ -91,10 +89,9 @@ env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents
                                   if flags.global_environment
                                   else TreeObservation(max_depth=flags.tree_depth))
               )
+environments = [copy.copy(env) for _ in range(BATCH_SIZE)]
 
 # After training we want to render the results so we also load a renderer
-env_renderer = RenderTool(env, gl="PILSVG", screen_width=800, screen_height=800,
-                          agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX)
 
 # Add some variables to keep track of the progress
 current_score = current_steps = current_collisions = current_done = mean_score = mean_steps = mean_collisions = mean_done = 0
@@ -109,24 +106,18 @@ if not flags.train:
 ACTIONS = {0: 'B', 1: 'L', 2: 'F', 3: 'R', 4: 'S'}
 
 
-def is_collision(a):
-    if obs[a] is None: return False
-    is_junction = not isinstance(obs[a].childs['L'], float) or not isinstance(obs[a].childs['R'], float)
+def is_collision(a, i):
+    if obs[i][a] is None: return False
+    is_junction = not isinstance(obs[i][a].childs['L'], float) or not isinstance(obs[i][a].childs['R'], float)
 
-    if not is_junction or env.agents[a].speed_data['position_fraction'] > 0:
-        action = ACTIONS[env.agents[a].speed_data['transition_action_on_cellexit']] if is_junction else 'F'
-        return obs[a].childs[action].num_agents_opposite_direction > 0 \
-               and obs[a].childs[action].dist_other_agent_encountered <= 1 \
-               and obs[a].childs[action].dist_other_agent_encountered < obs[a].childs[action].dist_unusable_switch
+    if not is_junction or environments[i].agents[a].speed_data['position_fraction'] > 0:
+        action = ACTIONS[environments[i].agents[a].speed_data['transition_action_on_cellexit']] if is_junction else 'F'
+        return obs[i][a].childs[action] != np.inf and obs[i][a].childs[action] != -np.inf\
+               and obs[i][a].childs[action].num_agents_opposite_direction > 0 \
+               and obs[i][a].childs[action].dist_other_agent_encountered <= 1 \
+               and obs[i][a].childs[action].dist_other_agent_encountered < obs[i][a].childs[action].dist_unusable_switch
     else:
         return False
-
-
-# Helper function to render the environment
-def render():
-    env_renderer.render_env(show_observations=False)
-    cv2.imshow('Render', cv2.cvtColor(env_renderer.get_image(), cv2.COLOR_BGR2RGB))
-    cv2.waitKey(120)
 
 
 def get_means(x, y, c, s):
@@ -138,70 +129,74 @@ episode = 0
 # Main training loop
 for episode in range(start + 1, flags.num_episodes + 1):
     agent.reset()
-    env_renderer.reset()
     obs, info = env.reset(True, True)
+    environments = [copy.copy(env) for _ in range(BATCH_SIZE)]
+    obs = [copy.deepcopy(obs) for _ in range(BATCH_SIZE)]
+    info = [copy.deepcopy(info) for _ in range(BATCH_SIZE)]
     score, steps_taken, collision = 0, 0, False
 
-    agent_obs = [normalize_observation(obs[a], flags.tree_depth, zero_center=True)
-                 for a in obs.keys()]
+    agent_obs = [[normalize_observation(o[a], flags.tree_depth, zero_center=True)
+                  for a in o.keys()] for o in obs]
     agent_obs_buffer = copy.deepcopy(agent_obs)
-    agent_count = len(agent_obs)
-    agent_action_buffer = [2] * agent_count
+    agent_count = len(agent_obs[0])
+    agent_action_buffer = [[2] * agent_count for _ in range(BATCH_SIZE)]
 
     # Run an episode
-    max_steps = 8 * (env.width + env.height)
+    max_steps = 8 * env.width + env.height
     for step in range(max_steps):
-        update_values = [False] * agent_count
-        action_dict = {}
+        update_values = [[False] * agent_count for _ in range(BATCH_SIZE)]
+        action_dict = [{} for _ in range(BATCH_SIZE)]
 
-        if any(info['action_required']):
-            ret_action = agent.act(agent_obs, eps=eps)
+        if all(any(inf['action_required']) for inf in info):
+            ret_action = agent.multi_act(agent_obs, eps=eps)
         else:
             ret_action = update_values
-        for idx, act in enumerate(ret_action):
-            if info['action_required'][idx]:
-                action_dict[idx] = act
-                # action_dict[a] = np.random.randint(5)
-                update_values[idx] = True
-                steps_taken += 1
-            else:
-                action_dict[idx] = 0
+        for idx, act_list in enumerate(ret_action):
+            for sub_idx, act in enumerate(act_list):
+                if info[idx]['action_required'][sub_idx]:
+                    action_dict[idx][sub_idx] = act
+                    # action_dict[a] = np.random.randint(5)
+                    update_values[idx][sub_idx] = True
+                    steps_taken += 1
+                else:
+                    action_dict[idx][sub_idx] = 0
 
         # Environment step
-        obs, rewards, done, info = env.step(action_dict)
-        score += sum(rewards.values()) / agent_count
+        obs, rewards, done, info = list(zip(*[e.step(a) for e, a in zip(environments, action_dict)]))
+        score += sum(sum(r.values()) for r in rewards) / (agent_count * BATCH_SIZE)
 
         # Check for collisions and episode completion
-        if step == max_steps - 1:
-            done['__all__'] = True
-        if any(is_collision(a) for a in obs):
+        all_done = step == (max_steps - 1)
+        if any(is_collision(a, i) for i, o in enumerate(obs) for a in o):
             collision = True
             # done['__all__'] = True
 
         # Update replay buffer and train agent
-        if flags.train and (any(update_values) or any(done) or done['__all__']):
+        if flags.train and (any(update_values) or all_done or all(any(d) for d in done)):
             agent.step(agent_obs_buffer,
                        agent_action_buffer,
                        agent_obs,
                        done,
-                       done['__all__'],
-                       [is_collision(a) for a in range(agent_count)],
+                       all_done,
+                       [[is_collision(a, i) for a in range(agent_count)] for i in range(BATCH_SIZE)],
                        flags.step_reward)
-            agent_obs_buffer = [o.clone() for o in agent_obs]
-            for key, value in action_dict.items():
-                agent_action_buffer[key] = value
+            agent_obs_buffer = copy.deepcopy(agent_obs)
+            for idx, act in enumerate(action_dict):
+                for key, value in act.items():
+                    agent_action_buffer[idx][key] = value
 
-        for a in range(agent_count):
-            if obs[a]:
-                agent_obs[a] = normalize_observation(obs[a], flags.tree_depth, zero_center=True)
+        for i in range(BATCH_SIZE):
+            for a in range(agent_count):
+                if obs[i][a]:
+                    agent_obs[i][a] = normalize_observation(obs[i][a], flags.tree_depth, zero_center=True)
 
-    # Render
-    # if flags.render_interval and episode % flags.render_interval == 0:
-    # if collision and all(agent.position for agent in env.agents):
-    #     render()
-    #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
-    #     break
-        if done['__all__']:
+        # Render
+        # if flags.render_interval and episode % flags.render_interval == 0:
+        # if collision and all(agent.position for agent in env.agents):
+        #     render()
+        #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
+        #     break
+        if all_done:
             break
 
     # Epsilon decay
@@ -209,8 +204,6 @@ for episode in range(start + 1, flags.num_episodes + 1):
         eps = max(0.01, flags.epsilon_decay * eps)
 
     # Save some training statistics in their respective deques
-    tasks_finished = sum(done[i] for i in range(agent_count))
-    current_done, mean_done = get_means(current_done, mean_done, tasks_finished / max(1, agent_count), episode)
     current_collisions, mean_collisions = get_means(current_collisions, mean_collisions, int(collision), episode)
     current_score, mean_score = get_means(current_score, mean_score, score / max_steps, episode)
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken, episode)
@@ -219,7 +212,6 @@ for episode in range(start + 1, flags.num_episodes + 1):
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
           f' | Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Collisions: {100 * current_collisions:5.2f}%, {100 * mean_collisions:5.2f}%'
-          f' | Finished: {100 * current_done:6.2f}%, {100 * mean_done:6.2f}%'
           f' | Epsilon: {eps:.2f}'
           f' | Episode/s: {episode / (time.time() - start_time):.2f}s', end='')
 

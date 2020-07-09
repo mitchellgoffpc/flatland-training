@@ -44,7 +44,9 @@ class ReplayBuffer:
         actions = self.stack([e.action for e in experiences]).long().to(device)
         rewards = self.stack([e.reward for e in experiences]).float().to(device)
         next_states = self.stack([e.next_state for e in experiences]).float().to(device)
-        dones = self.stack([[v for k, v in e.done.items() if not hasattr(k, 'startswith') or not k.startswith('_')]
+        dones = self.stack([[v for k, v in e.done.items()
+                             if not hasattr(k, 'startswith')
+                             or not k.startswith('_')]
                             for e in experiences]).float().to(device)
 
         return states, actions, rewards, next_states, dones
@@ -55,6 +57,8 @@ class ReplayBuffer:
                 return torch.stack([self.stack(st, -1) for st in states], dim)
             if isinstance(states[0], torch.Tensor):
                 return torch.stack(states, 0)
+            if isinstance(states[0], Iterable):
+                return torch.stack([self.stack(st, dim) for st in states], dim)
             return torch.tensor(states)
         return torch.tensor(states).view(len(states), 1)
 
