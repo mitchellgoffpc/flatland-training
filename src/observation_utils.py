@@ -6,8 +6,7 @@ try:
 except:
     from tree_observation import ACTIONS
 
-ZERO_NODE = np.array([0] * 11)  # For Q-Networks
-INF_DISTANCE_NODE = np.array([0] * 6 + [np.inf] + [0] * 4)  # For policy networks
+ZERO_NODE = torch.zeros((11,))
 
 
 # Helper function to detect collisions
@@ -28,7 +27,7 @@ def create_tree_features(node, current_depth, max_depth, empty_node, data):
         data.extend([empty_node] * num_remaining_nodes)
 
     else:
-        data.append(np.array(tuple(node)[:-2]))
+        data.append(torch.FloatTensor(tuple(node)[:-2]))
         if node.childs:
             for direction in ACTIONS:
                 create_tree_features(node.childs[direction], current_depth + 1, max_depth, empty_node, data)
@@ -41,39 +40,41 @@ FALSE = torch.zeros(1)
 
 
 # Normalize an observation to [0, 1] and then clip it to get rid of any infinite-valued features
-#@torch.jit.script
-def norm_obs_clip(obs, normalize_to_range):
-    max_obs = obs[obs < 1000].max()
-    max_obs.clamp_(min=1)
-    max_obs.add_(1)
+@torch.jit.script
+def max_obs(obs):
+    out = obs[obs < 1000].max()
+    out.clamp_(min=1)
+    out.add_(1)
+    return out
 
-    min_obs = torch.zeros(1)[0]
 
-    if normalize_to_range.item():
-        min_obs.add_(obs[obs >= 0].min().clamp(max=max_obs.item()))
+@torch.jit.script
+def wrap(data: torch.Tensor):
+    start = data[:, :6]
+    mid = data[:, 6]
+    max0 = max_obs(start)
+    max1 = max_obs(mid)
 
-    if max_obs == min_obs:
-        obs.div_(max_obs)
-    else:
-        obs.sub_(min_obs)
-        max_obs.sub_(min_obs)
-        obs.div_(max_obs)
-    return obs
+    min_obs = mid[mid >= 0].min()
+
+    mid.sub_(min_obs)
+    max1.sub_(min_obs)
+    mid.div_(max1)
+
+    start.div_(max0)
+
+    data.clamp_(-1, 1)
+
+    data[:, :6].sub_(data[:, :6].mean())
+    data[:, 7:].sub_(data[:, 7:].mean())
 
 
 # Normalize a tree observation
 def normalize_observation(tree, max_depth, zero_center=True):
-    empty_node = ZERO_NODE if zero_center else INF_DISTANCE_NODE
-    data = np.concatenate([create_tree_features(t, 0, max_depth, empty_node, []) for t in tree.values()]
-                          if isinstance(tree, dict) else
-                          create_tree_features(tree, 0, max_depth, empty_node, [])).reshape((-1, 11))
-    data = torch.as_tensor(data).float()
+    data = torch.cat([create_tree_features(t, 0, max_depth, ZERO_NODE, []) for t in tree.values()]
+                     if isinstance(tree, dict) else
+                     create_tree_features(tree, 0, max_depth, ZERO_NODE, []), 0).view((-1, 11))
 
-    norm_obs_clip(data[:, :6], FALSE)
-    norm_obs_clip(data[:, 6], TRUE)
-    data.clamp_(-1, 1)
+    wrap(data)
 
-    if zero_center:
-        data[:, :6].sub_(data[:, :6].mean())
-        data[:, 7:].sub_(data[:, 7:].mean())
-    return data.flatten()
+    return data.view(-1)
