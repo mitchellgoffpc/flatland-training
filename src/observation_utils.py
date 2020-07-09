@@ -9,15 +9,16 @@ ZERO_NODE = torch.zeros((11,))
 
 
 # Recursively create numpy arrays for each tree node
-def create_tree_features(node, current_depth, max_depth, empty_node, data):
-    if node == negative_infinity or node == positive_infinity or node is None:
-        num_remaining_nodes = (4 ** (max_depth - current_depth + 1) - 1) // 3
-        data.extend([empty_node] * num_remaining_nodes)
-    else:
-        data.append(torch.FloatTensor(tuple(node)[:-2]))
-        if node.childs:
-            any(create_tree_features(node.childs[direction], current_depth + 1, max_depth, empty_node, data)
-                for direction in ACTIONS)
+def create_tree_features(node, max_depth, data):
+    nodes = [(node, 0)]
+    for node, current_depth in nodes:
+        if node == negative_infinity or node == positive_infinity or node is None:
+            num_remaining_nodes = (4 ** (max_depth - current_depth + 1) - 1) // 3
+            data.extend([ZERO_NODE] * num_remaining_nodes)
+        else:
+            data.append(torch.FloatTensor(tuple(node)[:-2]))
+            if node.childs:
+                nodes.extend((node.childs[direction], current_depth + 1) for direction in ACTIONS)
 
 
 # Normalize an observation to [0, 1] and then clip it to get rid of any infinite-valued features
@@ -54,9 +55,9 @@ def wrap(data: torch.Tensor):
 def normalize_observation(tree, max_depth, zero_center=True):
     data = []
     if isinstance(tree, dict):
-        any(create_tree_features(t, 0, max_depth, ZERO_NODE, data) for t in tree.values())
+        any(create_tree_features(t, max_depth, data) for t in tree.values())
     else:
-        create_tree_features(tree, 0, max_depth, ZERO_NODE, data)
+        create_tree_features(tree, max_depth, data)
     data = torch.cat(data, 0).view((-1, 11))
 
     wrap(data)

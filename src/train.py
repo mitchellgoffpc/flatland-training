@@ -204,14 +204,14 @@ for episode in range(start + 1, flags.num_episodes + 1):
     # Save some training statistics in their respective deques
     current_collisions, mean_collisions = get_means(current_collisions, mean_collisions, int(collision), episode)
     current_score, mean_score = get_means(current_score, mean_score, score / max_steps, episode)
-    current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken, episode)
+    current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
 
     print(f'\rEpisode {episode:<5}'
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
-          f' | Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
+          f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Collisions: {100 * current_collisions:5.2f}%, {100 * mean_collisions:5.2f}%'
           f' | Epsilon: {eps:.2f}'
-          f' | Episode/s: {episode / (time.time() - start_time):.2f}s', end='')
+          f' | Episode/s: {episode / (time.time() - start_time):.4f}s', end='')
 
     if episode % flags.report_interval == 0:
         print("")
