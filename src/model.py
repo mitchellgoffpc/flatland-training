@@ -1,13 +1,16 @@
-import math
 import typing
 
-import numpy as np
 import torch
 
 
 @torch.jit.script
 def mish(fn_input: torch.Tensor) -> torch.Tensor:
     return fn_input * torch.tanh(torch.nn.functional.softplus(fn_input))
+
+
+class Mish(torch.nn.Module):
+    def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
+        return mish(fn_input)
 
 
 class WeightDropConv(torch.nn.Module):
@@ -19,7 +22,7 @@ class WeightDropConv(torch.nn.Module):
     """
 
     def __init__(self, in_features: int, out_features: int, kernel_size=1, bias=True, weight_dropout=0.1, groups=1,
-                 padding=0, dilation=1):
+                 padding=0, dilation=1, function=torch.nn.functional.conv1d, stride=1):
         super().__init__()
         self.weight_dropout = weight_dropout
         self.in_features = in_features
@@ -33,7 +36,8 @@ class WeightDropConv(torch.nn.Module):
             self.bias = torch.nn.Parameter(torch.Tensor(out_features))
         else:
             self.register_parameter('bias', None)
-        self._kwargs = {'bias': self.bias, 'padding': padding, 'dilation': dilation, 'groups': groups}
+        self._kwargs = {'bias': self.bias, 'padding': padding, 'dilation': dilation, 'groups': groups, 'stride': stride}
+        self._function = function
 
     def forward(self, fn_input):
         if self.training:
@@ -41,7 +45,7 @@ class WeightDropConv(torch.nn.Module):
         else:
             weight = self.weight
 
-        return torch.nn.functional.conv1d(fn_input, weight, **self._kwargs)
+        return self._function(fn_input, weight, **self._kwargs)
 
     def extra_repr(self):
         return 'in_features={}, out_features={}'.format(self.in_features, self.out_features)
@@ -50,21 +54,29 @@ class WeightDropConv(torch.nn.Module):
 class SeparableConvolution(torch.nn.Module):
     def __init__(self, in_features, out_features, kernel_size: typing.Union[int, tuple],
                  padding: typing.Union[int, tuple] = 0, dilation: typing.Union[int, tuple] = 1,
-                 norm=torch.nn.BatchNorm1d, bias=False):
+                 bias=False, dim=1, stride=1):
         super(SeparableConvolution, self).__init__()
-        self.depthwise_conv = WeightDropConv(in_features, in_features,
-                                             kernel_size,
-                                             padding=padding,
-                                             groups=in_features,
-                                             dilation=dilation,
-                                             bias=False)
-        self.mid_norm = norm(in_features)
-        self.pointwise_conv = WeightDropConv(in_features, out_features, 1, bias=bias)
+        self.depthwise = kernel_size > 1
+        function = getattr(torch.nn.functional, f'conv{dim}d')
+        norm = getattr(torch.nn, f'BatchNorm{dim}d')
+        if self.depthwise:
+            self.depthwise_conv = WeightDropConv(in_features, in_features,
+                                                 kernel_size,
+                                                 padding=padding,
+                                                 groups=in_features,
+                                                 dilation=dilation,
+                                                 bias=False,
+                                                 function=function,
+                                                 stride=stride)
+            self.mid_norm = norm(in_features)
+        self.pointwise_conv = WeightDropConv(in_features, out_features, 1, bias=bias, function=function)
         self.str = (f'SeparableConvolution({in_features}, {out_features}, {kernel_size}, '
                     + f'dilation={dilation}, padding={padding})')
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
-        return self.pointwise_conv(self.mid_norm(self.depthwise_conv(fn_input)))
+        if self.depthwise:
+            fn_input = self.mid_norm(self.depthwise_conv(fn_input))
+        return self.pointwise_conv(fn_input)
 
     def __str__(self):
         return self.str
@@ -77,6 +89,43 @@ def try_norm(tensor, norm):
     if norm is not None:
         tensor = mish(norm(tensor))
     return tensor
+
+
+def make_excite(conv, rank_norm, ranker, linear_norm, linear0, excite_norm, linear1):
+    @torch.jit.script
+    def excite(out):
+        batch = out.size(0)
+
+        exc = conv(out)
+
+        squeeze_heads = exc.size(1)
+
+        exc = torch.nn.functional.softmax(exc, 2)
+        exc = exc.unsqueeze(-1).transpose(1, -1)
+        exc = (out.unsqueeze(-1) * exc).sum(2)
+
+        # Rank experts (heads)
+        hds = exc.view(batch, squeeze_heads, -1)
+        exc = rank_norm(hds)
+        exc = ranker(mish(exc))
+        exc = exc.softmax(-1)
+        exc = exc.bmm(hds)
+        exc = exc.view(batch, -1, 1)
+
+        # Fully-connected block
+        nrm = linear_norm(exc).squeeze(-1)
+        nrm = linear0(nrm).unsqueeze(-1)
+        nrm = excite_norm(nrm)
+        act = mish(nrm.squeeze(-1))
+        exc = linear1(act).tanh()
+        exc = exc.unsqueeze(-1)
+        exc = exc.expand_as(out)
+
+        # Merge
+        out = out * exc
+        return out
+
+    return excite
 
 
 class Block(torch.nn.Module):
@@ -102,38 +151,21 @@ class Block(torch.nn.Module):
             self.linear0 = torch.nn.Linear(output_size * squeeze_heads, output_size, False)
             self.exc_norm = torch.nn.BatchNorm1d(output_size)
             self.linear1 = torch.nn.Linear(output_size, output_size)
+            self.excite = make_excite(self.excitation_conv,
+                                      self.exc_input_norm,
+                                      self.expert_ranker,
+                                      self.linear_in_norm,
+                                      self.linear0,
+                                      self.exc_norm,
+                                      self.linear1)
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
-        batch = fn_input.size(0)
         fn_input = try_norm(fn_input, self.init_norm)
         out = self.linr(fn_input)
         out = try_norm(out, self.out_norm)
 
         if self.use_squeeze_attention:
-            exc = self.excitation_conv(out)
-            exc = torch.nn.functional.softmax(exc, 2)
-            exc = exc.unsqueeze(-1).transpose(1, -1)
-            exc = (out.unsqueeze(-1) * exc).sum(2)
-
-            # Rank experts (heads)
-            hds = exc.view(batch, self.squeeze_heads, -1)
-            exc = self.exc_input_norm(hds)
-            exc = self.expert_ranker(mish(exc))
-            exc = exc.softmax(-1)
-            exc = exc.bmm(hds)
-            exc = exc.view(batch, -1, 1)
-
-            # Fully-connected block
-            nrm = self.linear_in_norm(exc).squeeze(-1)
-            nrm = self.linear0(nrm).unsqueeze(-1)
-            nrm = self.exc_norm(nrm)
-            act = mish(nrm.squeeze(-1))
-            exc = self.linear1(act).tanh()
-            exc = exc.unsqueeze(-1)
-            exc = exc.expand_as(out)
-
-            # Merge
-            out = out * exc
+            out = self.excite(out)
 
         if self.cat:
             return torch.cat([out, fn_input], 1)
@@ -144,106 +176,115 @@ class Block(torch.nn.Module):
         return out
 
 
-# class Residual(torch.nn.Module):
-#     def __init__(self, m1, m2=None):
-#         import random
-#         super().__init__()
-#         self.m1 = m1
-#         self.m2 = copy.deepcopy(m1) if m2 is None else m2
-#         self.name = f'residual_{str(int(random.randint(0, 2 ** 32)))}'
-#
-#     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
-#         double = fn_input.size(1) > 1
-#         if double:
-#             f0, f1 = fn_input.chunk(2, 1)
-#             o0 = self.m1(f0)
-#             o1 = self.m2(f1)
-#             return torch.cat([o0, o1], 1) + fn_input
-#         else:
-#             return self.m1(fn_input) + self.m2(fn_input) + fn_input
-#
-#     def __str__(self):
-#         return f'{self.__class__.__name__}(ID: {self.name}, M1: {self.m1}, M2: {self.m2})'
-#
-#     def __repr__(self):
-#         return str(self)
-#
-#
-# def layer_split(target_depth, features, split_depth=3, uneven: typing.Union[bool, int] = False):
-#     layer_list = []
-#
-#     if target_depth > split_depth ** 2:
-#         for _ in range(split_depth):
-#             layer_list.append(layer_split(target_depth // split_depth, features // 2, split_depth, features % 2))
-#         layer_list.append(layer_split(target_depth % split_depth, features // 2, split_depth, features % 2))
-#     elif target_depth > split_depth:
-#         for _ in range(target_depth // split_depth):
-#             layer_list.append(layer_split(split_depth, features // 2, split_depth, features % 2))
-#         layer_list.append(layer_split(target_depth % split_depth, features // 2, split_depth, features % 2))
-#     else:
-#         tmp_features = max(2, features)
-#         f2, mod = tmp_features // 2, tmp_features % 2
-#         layer_list = [Residual(Block(f2 + mod, f2 + mod), Block(f2, f2)) for _ in range(target_depth)]
-#     layer = torch.nn.Sequential(*layer_list)
-#     features = max(1, features + uneven)
-#     layer = Residual(Block(features, features), layer)
-#     return layer
+class BasicBlock(torch.nn.Module):
+    def __init__(self, in_features, out_features, stride, init_norm=False):
+        super(BasicBlock, self).__init__()
+        self.init_norm = torch.nn.BatchNorm2d(out_features) if init_norm else None
+        self.init_conv = SeparableConvolution(in_features, out_features, 3, 1, stride=stride, dim=2)
+        self.mid_norm = torch.nn.BatchNorm2d(out_features)
+        self.end_conv = SeparableConvolution(in_features, out_features, 3, 1, dim=2)
+        self.shortcut = (None
+                         if stride == 1 and in_features == out_features
+                         else SeparableConvolution(in_features, out_features, 3, 1, stride=stride, dim=2))
+
+    def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
+        out = self.init_conv(fn_input if self.init_norm is None else mish(self.init_norm(fn_input)))
+        out = mish(self.mid_norm(out))
+        out = self.end_conv(out)
+        if self.shortcut is not None:
+            fn_input = self.shortcut(fn_input)
+        out = out + fn_input
+        return out
 
 
-class QNetwork(torch.nn.Module):
-    def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=True):
-        """
-        11 input features, state_size//11 = item_count
-        :param state_size:
-        :param action_size:
-        :param hidden_factor:
-        :param depth:
-        :return:
-        """
-        super(QNetwork, self).__init__()
-        observations = state_size // 11
-        print(f"[DEBUG/MODEL] Using {observations} observations as input")
+class ConvNetwork(torch.nn.Module):
+    def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=True,
+                 debug=True):
+        super(ConvNetwork, self).__init__()
+        hidden_size = 11 * hidden_factor
+        self.net = torch.nn.ModuleList([BasicBlock(state_size, hidden_size, 1),
+                                        *[BasicBlock(hidden_size, hidden_size, 2 - i % 2, True)
+                                          for i in range(depth)]])
+        self.init_norm = torch.nn.BatchNorm1d(hidden_size)
+        self.linear0 = torch.nn.Linear(hidden_size, hidden_size, bias=False)
+        self.mid_norm = torch.nn.BatchNorm1d(hidden_size)
+        self.linear1 = torch.nn.Linear(hidden_size, action_size)
 
-        out_features = hidden_factor * 11
-
-        net = torch.nn.ModuleList([torch.nn.Conv1d(state_size, out_features, 1),
-                                   *[Block(out_features + out_features * i * cat,
-                                           out_features,
-                                           cat=True,
-                                           init_norm=not i,
-                                           kernel_size=kernel_size,
-                                           squeeze_heads=squeeze_heads)
-                                     for i in range(depth)],
-                                   Block(out_features + out_features * depth * cat, action_size,
-                                         bias=True,
-                                         cat=False,
-                                         out_norm=False,
-                                         init_norm=False,
-                                         kernel_size=kernel_size,
-                                         squeeze_heads=squeeze_heads)])
-
-        def init(module: torch.nn.Module):
-            if hasattr(module, "weight") and hasattr(module.weight, "data"):
-                if "norm" in module.__class__.__name__.lower() or (
-                        hasattr(module, "__str__") and "norm" in str(module).lower()):
-                    torch.nn.init.uniform_(module.weight.data, 0.998, 1.002)
-                else:
-                    torch.nn.init.orthogonal_(module.weight.data)
-            if hasattr(module, "bias") and hasattr(module.bias, "data"):
-                torch.nn.init.constant_(module.bias.data, 0)
-
-        net.apply(init)
-
-        parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, net.parameters()))
-        digits = int(math.log10(parameters))
-        number_string = " kMGTPEZY"[digits // 3]
-
-        print(f"[DEBUG/MODEL] Training with {parameters * 10 ** -(digits // 3 * 3):.1f}{number_string} parameters")
-
-        self.net = net
-
-    def forward(self, fn_input: torch.Tensor) -> typing.Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         out = fn_input
         for module in self.net:
             out = module(out)
+        out = out.mean((2, 3))
+        out = self.linear1(mish(self.mid_norm(self.linear0(mish(self.init_norm(out))))))
         return out
+
+
+# class QNetwork(torch.nn.Module):
+#     def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
+#                  debug=True):
+#         """
+#         11 input features, state_size//11 = item_count
+#         :param state_size:
+#         :param action_size:
+#         :param hidden_factor:
+#         :param depth:
+#         :return:
+#         """
+#         super(QNetwork, self).__init__()
+#         observations = state_size // 11
+#         if debug:
+#             print(f"[DEBUG/MODEL] Using {observations} observations as input")
+#
+#         out_features = hidden_factor * 11
+#
+#         net = torch.nn.ModuleList([torch.nn.Conv1d(state_size, out_features, 1),
+#                                    *[Block(out_features + out_features * i * cat,
+#                                            out_features,
+#                                            cat=cat,
+#                                            init_norm=not i,
+#                                            kernel_size=kernel_size,
+#                                            squeeze_heads=squeeze_heads)
+#                                      for i in range(depth)],
+#                                    Block(out_features + out_features * depth * cat, action_size,
+#                                          bias=True,
+#                                          cat=False,
+#                                          out_norm=False,
+#                                          init_norm=False,
+#                                          kernel_size=kernel_size,
+#                                          squeeze_heads=squeeze_heads)])
+#
+#         def init(module: torch.nn.Module):
+#             if hasattr(module, "weight") and hasattr(module.weight, "data"):
+#                 if "norm" in module.__class__.__name__.lower() or (
+#                         hasattr(module, "__str__") and "norm" in str(module).lower()):
+#                     torch.nn.init.uniform_(module.weight.data, 0.998, 1.002)
+#                 else:
+#                     torch.nn.init.orthogonal_(module.weight.data)
+#             if hasattr(module, "bias") and hasattr(module.bias, "data"):
+#                 torch.nn.init.constant_(module.bias.data, 0)
+#
+#         net.apply(init)
+#
+#         if debug:
+#             parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, net.parameters()))
+#             digits = int(math.log10(parameters))
+#             number_string = " kMGTPEZY"[digits // 3]
+#
+#             print(
+#                 f"[DEBUG/MODEL] Training with {parameters * 10 ** -(digits // 3 * 3):.1f}{number_string} parameters")
+#
+#         self.net = net
+#
+#     def forward(self, fn_input: torch.Tensor) -> typing.Tuple[torch.Tensor, torch.Tensor]:
+#         out = fn_input
+#         for module in self.net:
+#             out = module(out)
+#         return out
+
+def QNetwork(state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
+             debug=True):
+    model = torch.nn.Sequential(torch.nn.Conv1d(state_size, 11 * hidden_factor, 1, bias=False),
+                               torch.nn.BatchNorm1d(11 * hidden_factor),
+                               Mish(),
+                               torch.nn.Conv1d(11*hidden_factor, action_size, 1))
+    return model

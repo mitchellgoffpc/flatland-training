@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
 from flatland.envs.rail_env import RailEnv
+from flatland.envs.observations import GlobalObsForRailEnv
 from flatland.utils.rendertools import RenderTool, AgentRenderVariant
 from tensorboardX import SummaryWriter
 
@@ -38,9 +39,9 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
 parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
 parser.add_argument("--num-agents", type=int, default=5, help="Number of agents in each episode")
-parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
-parser.add_argument("--model-depth", type=int, default=4, help="Depth of the observation tree")
-parser.add_argument("--hidden-factor", type=int, default=15, help="Depth of the observation tree")
+parser.add_argument("--tree-depth", type=int, default=2, help="Depth of the observation tree")
+parser.add_argument("--model-depth", type=int, default=1, help="Depth of the observation tree")
+parser.add_argument("--hidden-factor", type=int, default=5, help="Depth of the observation tree")
 parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the observation tree")
 
@@ -49,6 +50,7 @@ parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help=
 parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of episodes to train for")
 parser.add_argument("--epsilon-decay", type=float, default=0, help="Decay factor for epsilon-greedy exploration")
 parser.add_argument("--step-reward", type=float, default=-1e-2, help="Depth of the observation tree")
+parser.add_argument("--global-environment", type=boolean, default=False, help="Depth of the observation tree")
 
 flags = parser.parse_args()
 
@@ -65,11 +67,11 @@ action_size = 5
 # Load an RL agent and initialize it from checkpoint if necessary
 agent = DQN_Agent(state_size,
                   action_size,
-                  flags.num_agents,
                   flags.model_depth,
                   flags.hidden_factor,
                   flags.kernel_size,
-                  flags.squeeze_heads)
+                  flags.squeeze_heads,
+                  flags.global_environment)
 if flags.load_model:
     start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
 else:
@@ -85,7 +87,9 @@ env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents
               rail_generator=rail_generator,
               schedule_generator=schedule_generator,
               malfunction_generator_and_process_data=malfunction_from_params(MalfunctionParameters(1 / 8000, 15, 50)),
-              obs_builder_object=TreeObservation(max_depth=flags.tree_depth)
+              obs_builder_object=(GlobalObsForRailEnv()
+                                  if flags.global_environment
+                                  else TreeObservation(max_depth=flags.tree_depth))
               )
 
 # After training we want to render the results so we also load a renderer

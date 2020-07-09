@@ -44,7 +44,8 @@ class ReplayBuffer:
         actions = self.stack([e.action for e in experiences]).long().to(device)
         rewards = self.stack([e.reward for e in experiences]).float().to(device)
         next_states = self.stack([e.next_state for e in experiences]).float().to(device)
-        dones = self.stack([list(e.done.values()) for e in experiences]).float().to(device)
+        dones = self.stack([[v for k, v in e.done.items() if not hasattr(k, 'startswith') or not k.startswith('_')]
+                            for e in experiences]).float().to(device)
 
         return states, actions, rewards, next_states, dones
 
