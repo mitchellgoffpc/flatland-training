@@ -5,7 +5,7 @@ try:
 except:
     from tree_observation import ACTIONS, negative_infinity, positive_infinity
 
-ZERO_NODE = torch.zeros((11,))
+ZERO_NODE = torch.zeros((1, 11))
 
 
 # Recursively create numpy arrays for each tree node
@@ -14,9 +14,9 @@ def create_tree_features(node, max_depth, data):
     for node, current_depth in nodes:
         if node == negative_infinity or node == positive_infinity or node is None:
             num_remaining_nodes = (4 ** (max_depth - current_depth + 1) - 1) // 3
-            data.extend([ZERO_NODE] * num_remaining_nodes)
+            data.append(ZERO_NODE.expand(num_remaining_nodes, -1))
         else:
-            data.append(torch.FloatTensor(tuple(node)[:-2]))
+            data.append(torch.FloatTensor(node[:-2]).view(1, 11))
             if node.childs:
                 nodes.extend((node.childs[direction], current_depth + 1) for direction in ACTIONS)
 
@@ -52,14 +52,18 @@ def wrap(data: torch.Tensor):
 
 
 # Normalize a tree observation
-def normalize_observation(tree, max_depth, zero_center=True):
+def normalize_observation(tree, max_depth, shared_tensor, inner_index):
     data = []
     if isinstance(tree, dict):
-        any(create_tree_features(t, max_depth, data) for t in tree.values())
-    else:
-        create_tree_features(tree, max_depth, data)
-    data = torch.cat(data, 0).view((-1, 11))
+        tree = tree.values()
+    for t in tree:
+        data.append([])
+        if isinstance(t, dict):
+            any(create_tree_features(d, max_depth, data[-1]) for d in t.values())
+        else:
+            create_tree_features(t, max_depth, data[-1])
+    data = torch.stack([torch.cat(dat, 0) for dat in data], -1)
 
     wrap(data)
 
-    return data.view(-1)
+    shared_tensor[inner_index] = data.flatten(0, 1)

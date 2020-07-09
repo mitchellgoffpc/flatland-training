@@ -2,7 +2,8 @@ import argparse
 import copy
 import time
 from pathlib import Path
-
+from pathos import multiprocessing
+import torch
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
 from flatland.envs.observations import GlobalObsForRailEnv
 from flatland.envs.rail_env import RailEnv
@@ -36,7 +37,7 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
 parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
 parser.add_argument("--num-agents", type=int, default=5, help="Number of agents in each episode")
-parser.add_argument("--tree-depth", type=int, default=2, help="Depth of the observation tree")
+parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--model-depth", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--hidden-factor", type=int, default=5, help="Depth of the observation tree")
 parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
@@ -46,7 +47,7 @@ parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the o
 parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
 parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of episodes to train for")
 parser.add_argument("--epsilon-decay", type=float, default=0, help="Decay factor for epsilon-greedy exploration")
-parser.add_argument("--step-reward", type=float, default=-1e-2, help="Depth of the observation tree")
+parser.add_argument("--step-reward", type=float, default=-1, help="Depth of the observation tree")
 parser.add_argument("--global-environment", type=boolean, default=False, help="Depth of the observation tree")
 
 flags = parser.parse_args()
@@ -92,7 +93,7 @@ environments = [copy.copy(env) for _ in range(BATCH_SIZE)]
 # After training we want to render the results so we also load a renderer
 
 # Add some variables to keep track of the progress
-current_score = current_steps = current_collisions = current_done = mean_score = mean_steps = mean_collisions = mean_done = 0
+current_score = current_steps = current_collisions = current_done = mean_score = mean_steps = mean_collisions = mean_done = current_taken = mean_taken = 0
 
 agent_action_buffer = []
 start_time = time.time()
@@ -123,6 +124,7 @@ def get_means(x, y, c, s):
 
 
 episode = 0
+POOL = multiprocessing.Pool()
 
 # Main training loop
 for episode in range(start + 1, flags.num_episodes + 1):
@@ -132,11 +134,10 @@ for episode in range(start + 1, flags.num_episodes + 1):
     obs = [copy.deepcopy(obs) for _ in range(BATCH_SIZE)]
     info = [copy.deepcopy(info) for _ in range(BATCH_SIZE)]
     score, steps_taken, collision = 0, 0, False
-
-    agent_obs = [[normalize_observation(o[a], flags.tree_depth, zero_center=True)
-                  for a in o.keys()] for o in obs]
-    agent_obs_buffer = copy.deepcopy(agent_obs)
-    agent_count = len(agent_obs[0])
+    agent_count = len(obs[0])
+    agent_obs = torch.zeros((BATCH_SIZE, state_size, agent_count))
+    POOL.starmap(func=normalize_observation, iterable=((o, flags.tree_depth, agent_obs, i) for i, o in enumerate(obs)))
+    agent_obs_buffer = agent_obs.clone()
     agent_action_buffer = [[2] * agent_count for _ in range(BATCH_SIZE)]
 
     # Run an episode
@@ -164,7 +165,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
         score += sum(sum(r.values()) for r in rewards) / (agent_count * BATCH_SIZE)
 
         # Check for collisions and episode completion
-        all_done = step == (max_steps - 1)
+        all_done = step == (max_steps - 1) or any(d['__all__'] for d in done)
         if any(is_collision(a, i) for i, o in enumerate(obs) for a in o):
             collision = True
             # done['__all__'] = True
@@ -178,16 +179,13 @@ for episode in range(start + 1, flags.num_episodes + 1):
                        all_done,
                        [[is_collision(a, i) for a in range(agent_count)] for i in range(BATCH_SIZE)],
                        flags.step_reward)
-            agent_obs_buffer = copy.deepcopy(agent_obs)
+            agent_obs_buffer = agent_obs.clone()
             for idx, act in enumerate(action_dict):
                 for key, value in act.items():
                     agent_action_buffer[idx][key] = value
 
-        for i in range(BATCH_SIZE):
-            for a in range(agent_count):
-                if obs[i][a]:
-                    agent_obs[i][a] = normalize_observation(obs[i][a], flags.tree_depth, zero_center=True)
-
+        POOL.starmap(func=normalize_observation,
+                     iterable=((o, flags.tree_depth, agent_obs, i) for i, o in enumerate(obs)))
         # Render
         # if flags.render_interval and episode % flags.render_interval == 0:
         # if collision and all(agent.position for agent in env.agents):
@@ -205,10 +203,12 @@ for episode in range(start + 1, flags.num_episodes + 1):
     current_collisions, mean_collisions = get_means(current_collisions, mean_collisions, int(collision), episode)
     current_score, mean_score = get_means(current_score, mean_score, score / max_steps, episode)
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
+    current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
 
     print(f'\rEpisode {episode:<5}'
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
+          f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'
           f' | Collisions: {100 * current_collisions:5.2f}%, {100 * mean_collisions:5.2f}%'
           f' | Epsilon: {eps:.2f}'
           f' | Episode/s: {episode / (time.time() - start_time):.4f}s', end='')

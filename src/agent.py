@@ -17,7 +17,7 @@ BATCH_SIZE = 64
 GAMMA = 0.998
 TAU = 1e-3
 LR = 2e-4
-UPDATE_EVERY = 1
+UPDATE_EVERY = 16
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -49,6 +49,7 @@ class Agent:
 
         # Replay memory
         self.memory = ReplayBuffer(BATCH_SIZE)
+        self.stack = [[] for _ in range(5)]
         self.t_step = 0
 
     def reset(self):
@@ -70,11 +71,9 @@ class Agent:
                 else torch.randint(self.action_size, ()).item()
                 for i in range(agent_count)]
 
-    def multi_act(self, states, eps=0.):
-        agent_count = len(states[0])
-        state = torch.stack([torch.stack(state, -1) if len(state) > 1 else state.unsqueeze(-1)
-                             for state in states], 0).to(device)
-        state = torch.cat([state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
+    def multi_act(self, state, eps=0.):
+        agent_count = state.size(-1)
+        state = torch.cat([state.to(device), torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
         self.qnetwork_local.eval()
         with torch.no_grad():
             action_values = self.qnetwork_local(state)
@@ -89,18 +88,25 @@ class Agent:
     # Record the results of the agent's action and update the model
 
     def step(self, state, action, next_state, agent_done, episode_done, collision, step_reward=-1):
-        state = self.memory.stack(state).to(device).transpose(1, 2)
-        action = self.memory.stack(action).to(device)
-        reward = self.memory.stack([1 if ad
-                                    else (c - 5 if collision else step_reward)
-                                    for ad, c in zip(agent_done, collision)]).to(device)
-        next_state = self.memory.stack(next_state).to(device).transpose(1, 2)
-        dones = self.memory.stack([[v or episode_done for k, v in a.items()
-                                    if not hasattr(k, 'startswith')
-                                    or not k.startswith('_')] for a in agent_done]).to(device).float()
-        state = torch.cat([state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
-        next_state = torch.cat([next_state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
-        self.learn(state, action, reward, next_state, dones)
+        if len(self.stack) >= UPDATE_EVERY - 1:
+            action = self.memory.stack(self.stack[1]).to(device)
+            reward = self.memory.stack([1 if ad
+                                        else (c - 5 if collision else step_reward)
+                                        for ad, c in zip(self.stack[2], self.stack[4])]).to(device)
+            dones = self.memory.stack(self.stack[3]).to(device).float()
+            state = state.to(device)
+            next_state = next_state.to(device)
+            state = torch.cat([state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
+            next_state = torch.cat([next_state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
+            self.learn(state, action, reward, next_state, dones)
+        else:
+            self.stack[0].append(state)
+            self.stack[1].append(action)
+            self.stack[2].append(next_state)
+            self.stack[3].append([[v or episode_done for k, v in a.items()
+                                   if not hasattr(k, 'startswith')
+                                   or not k.startswith('_')] for a in agent_done])
+            self.stack[4].append(collision)
 
     def learn(self, states, actions, rewards, next_states, dones):
         self.qnetwork_local.train()
@@ -117,7 +123,7 @@ class Agent:
 
         # Compute loss and perform a gradient step
         self.optimizer.zero_grad()
-        loss = (rewards.unsqueeze(-1) + GAMMA * Q_targets_next * (1 - dones.unsqueeze(-2)) - Q_expected).square().mean()
+        loss = (GAMMA * Q_targets_next * (1 - dones.unsqueeze(-2)) - Q_expected - rewards.unsqueeze(-1)).square().mean()
         loss.backward()
         self.optimizer.step()
 
