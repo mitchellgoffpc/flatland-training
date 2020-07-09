@@ -3,7 +3,6 @@ import copy
 import time
 from pathlib import Path
 
-import numpy as np
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
 from flatland.envs.observations import GlobalObsForRailEnv
 from flatland.envs.rail_env import RailEnv
@@ -11,13 +10,13 @@ from tensorboardX import SummaryWriter
 
 try:
     from .agent import Agent as DQN_Agent, device, BATCH_SIZE
-    from .tree_observation import TreeObservation
-    from .observation_utils import normalize_observation, is_collision
+    from .tree_observation import TreeObservation, negative_infinity, positive_infinity
+    from .observation_utils import normalize_observation
     from .railway_utils import load_precomputed_railways, create_random_railways
 except:
     from agent import Agent as DQN_Agent, device, BATCH_SIZE
-    from tree_observation import TreeObservation
-    from observation_utils import normalize_observation, is_collision
+    from tree_observation import TreeObservation, negative_infinity, positive_infinity
+    from observation_utils import normalize_observation
     from railway_utils import load_precomputed_railways, create_random_railways
 
 project_root = Path(__file__).resolve().parent.parent
@@ -53,13 +52,12 @@ parser.add_argument("--global-environment", type=boolean, default=False, help="D
 flags = parser.parse_args()
 
 # Seeded RNG so we can replicate our results
-np.random.seed(1)
 
 # Create a tensorboard SummaryWriter
 summary = SummaryWriter(f'tensorboard/dqn/agents: {flags.num_agents}, tree_depth: {flags.tree_depth}')
 # Calculate the state size based on the number of nodes in the tree observation
 num_features_per_node = 11  # env.obs_builder.observation_dim
-num_nodes = sum(np.power(4, i) for i in range(flags.tree_depth + 1))
+num_nodes = int('1' * (flags.tree_depth + 1), 4)
 state_size = num_nodes * num_features_per_node
 action_size = 5
 # Load an RL agent and initialize it from checkpoint if necessary
@@ -112,7 +110,7 @@ def is_collision(a, i):
 
     if not is_junction or environments[i].agents[a].speed_data['position_fraction'] > 0:
         action = ACTIONS[environments[i].agents[a].speed_data['transition_action_on_cellexit']] if is_junction else 'F'
-        return obs[i][a].childs[action] != np.inf and obs[i][a].childs[action] != -np.inf\
+        return obs[i][a].childs[action] != negative_infinity and obs[i][a].childs[action] != positive_infinity \
                and obs[i][a].childs[action].num_agents_opposite_direction > 0 \
                and obs[i][a].childs[action].dist_other_agent_encountered <= 1 \
                and obs[i][a].childs[action].dist_other_agent_encountered < obs[i][a].childs[action].dist_unusable_switch

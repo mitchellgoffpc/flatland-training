@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-import numpy as np
+import torch
 from flatland.core.env_observation_builder import ObservationBuilder
 from flatland.core.grid.grid4_utils import get_new_position
 from flatland.envs.agent_utils import RailAgentStatus
@@ -8,6 +8,9 @@ from flatland.envs.observations import TreeObsForRailEnv
 
 ACTIONS = ['L', 'F', 'R', 'B']
 Node = TreeObsForRailEnv.Node
+
+positive_infinity = (torch.ones(1) / torch.zeros(1))[0]
+negative_infinity = -positive_infinity
 
 
 def first(list):
@@ -159,9 +162,9 @@ class TreeObservation(ObservationBuilder):
                             for start, _, start_direction, distance in self.edge_positions[
                                 (*agent.position, direction)]:
                                 edge_distance = distance if direction == agent.direction else \
-                                start.edges[start_direction][1] - distance
+                                    start.edges[start_direction][1] - distance
                                 edge_dict[(*start.position, start_direction)][agent.handle] = (
-                                distance, agent.speed_data['speed'])
+                                    distance, agent.speed_data['speed'])
 
                     # Check for malfunctions
                     if agent.malfunction_data['malfunction']:
@@ -190,7 +193,7 @@ class TreeObservation(ObservationBuilder):
             return None
 
         # The root node contains information about the agent itself
-        children = {x: -np.inf for x in ACTIONS}
+        children = {x: negative_infinity for x in ACTIONS}
         dist_min_to_target = self.env.distance_map.get()[(handle, *agent_position, agent.direction)]
         agent_malfunctioning, agent_speed = agent.malfunction_data['malfunction'], agent.speed_data['speed']
         root_tree_node = Node(0, 0, 0, 0, 0, 0, dist_min_to_target, 0, 0, agent_malfunctioning, agent_speed, 0,
@@ -225,8 +228,8 @@ class TreeObservation(ObservationBuilder):
         targets, agents, minor_nodes = [], [], []
         edge_length, max_malfunction_length = 0, 0
         num_agents_same_direction, num_agents_other_direction = 0, 0
-        distance_to_minor_node, distance_to_other_agent = np.inf, np.inf
-        distance_to_own_target, distance_to_other_target = np.inf, np.inf
+        distance_to_minor_node, distance_to_other_agent = positive_infinity, positive_infinity
+        distance_to_own_target, distance_to_other_target = positive_infinity, positive_infinity
         min_agent_speed, num_agent_departures = 1.0, 0
 
         # Skip ahead until we get to a major node, logging any agents on the tracks along the way
@@ -295,7 +298,7 @@ class TreeObservation(ObservationBuilder):
 
         # Create a new tree node and populate its children
         if depth < self.max_depth:
-            children = {x: -np.inf for x in ACTIONS}
+            children = {x: negative_infinity for x in ACTIONS}
             if not self.is_own_target(agent, node):
                 for direction in node.edges.keys():
                     children[get_action(orientation, direction)] = \
@@ -308,7 +311,7 @@ class TreeObservation(ObservationBuilder):
         return Node(dist_own_target_encountered=total_distance + distance_to_own_target,
                     dist_other_target_encountered=total_distance + distance_to_other_target,
                     dist_other_agent_encountered=total_distance + distance_to_other_agent,
-                    dist_potential_conflict=np.inf,
+                    dist_potential_conflict=positive_infinity,
                     dist_unusable_switch=total_distance + distance_to_minor_node,
                     dist_to_next_branch=total_distance + edge_length,
                     dist_min_to_target=self.env.distance_map.get()[(agent.handle, *node.position, orientation)] or 0,
