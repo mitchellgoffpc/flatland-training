@@ -10,17 +10,18 @@ from flatland.envs.observations import GlobalObsForRailEnv
 from flatland.envs.rail_env import RailEnv
 from pathos import multiprocessing
 
+positive_infinity = int(1e5)
+negative_infinity = -positive_infinity
+
 try:
     from .agent import Agent as DQN_Agent, device, BATCH_SIZE
     from .normalize_output_data import wrap
-    from .tree_observation import TreeObservation, negative_infinity, positive_infinity
-    from .observation_utils import normalize_observation
+    from .observation_utils import normalize_observation, TreeObservation
     from .railway_utils import load_precomputed_railways, create_random_railways
 except:
     from agent import Agent as DQN_Agent, device, BATCH_SIZE
     from normalize_output_data import wrap
-    from tree_observation import TreeObservation, negative_infinity, positive_infinity
-    from observation_utils import normalize_observation
+    from observation_utils import normalize_observation, TreeObservation
     from railway_utils import load_precomputed_railways, create_random_railways
 
 project_root = Path(__file__).resolve().parent.parent
@@ -226,7 +227,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
     current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
 
-    print(f'\rBatch {episode:<5} - Episode {BATCH_SIZE*episode:<5}'
+    print(f'\rBatch {episode:<5} - Episode {BATCH_SIZE * episode:<5}'
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'

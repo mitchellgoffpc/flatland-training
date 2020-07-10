@@ -1,6 +1,7 @@
 import torch
 
-#torch.jit.optimized_execution(True)
+
+torch.jit.optimized_execution(True)
 
 
 def wrap(data: torch.Tensor):
@@ -29,5 +30,6 @@ def wrap(data: torch.Tensor):
     data[:, :, :6].sub_(data[:, :, :6].mean())
     data[:, :, 7:].sub_(data[:, :, 7:].mean())
     data.detach_()
+
 
 wrap = torch.jit.script(wrap)
