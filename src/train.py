@@ -84,15 +84,16 @@ else:
     rail_generator, schedule_generator = create_random_railways(project_root)
 
 # Create the Flatland environment
-env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
-              rail_generator=rail_generator,
-              schedule_generator=schedule_generator,
-              malfunction_generator_and_process_data=malfunction_from_params(MalfunctionParameters(1 / 8000, 15, 50)),
-              obs_builder_object=(GlobalObsForRailEnv()
-                                  if flags.global_environment
-                                  else TreeObservation(max_depth=flags.tree_depth))
-              )
-environments = [copy.copy(env) for _ in range(BATCH_SIZE)]
+environments = [RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
+                        rail_generator=rail_generator,
+                        schedule_generator=schedule_generator,
+                        malfunction_generator_and_process_data=malfunction_from_params(
+                            MalfunctionParameters(1 / 8000, 15, 50)),
+                        obs_builder_object=(GlobalObsForRailEnv()
+                                            if flags.global_environment
+                                            else TreeObservation(max_depth=flags.tree_depth))
+                        ) for _ in range(BATCH_SIZE)]
+env = environments[0]
 
 # After training we want to render the results so we also load a renderer
 
@@ -151,10 +152,7 @@ POOL = multiprocessing.Pool()
 # Main training loop
 for episode in range(start + 1, flags.num_episodes + 1):
     agent.reset()
-    obs, info = env.reset(True, True)
-    environments = [copy.copy(env) for _ in range(BATCH_SIZE)]
-    obs = tuple(copy.deepcopy(obs) for _ in range(BATCH_SIZE))
-    info = [copy.deepcopy(info) for _ in range(BATCH_SIZE)]
+    obs, info = zip(*[env.reset(True, True) for env in environments])
     score, steps_taken, collision = 0, 0, False
     agent_count = len(obs[0])
     agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
@@ -168,7 +166,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
         update_values = [[False] * agent_count for _ in range(BATCH_SIZE)]
         action_dict = [{} for _ in range(BATCH_SIZE)]
 
-        if all(any(inf['action_required']) for inf in info):
+        if any(any(inf['action_required']) for inf in info):
             ret_action = agent.multi_act(agent_obs.flatten(1, 2), eps=eps)
         else:
             ret_action = update_values
@@ -227,7 +225,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
     current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
 
-    print(f'\rBatch {episode:<5} - Episode {BATCH_SIZE * episode:<5}'
+    print(f'\rBatch {episode:<4} - Episode {BATCH_SIZE * episode:<6}'
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'

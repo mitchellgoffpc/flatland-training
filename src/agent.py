@@ -17,7 +17,8 @@ BATCH_SIZE = 64
 GAMMA = 0.998
 TAU = 1e-3
 LR = 2e-4
-UPDATE_EVERY = 16
+UPDATE_EVERY = 1
+DOUBLE_DQN = False
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -88,25 +89,27 @@ class Agent:
     # Record the results of the agent's action and update the model
 
     def step(self, state, action, next_state, agent_done, episode_done, collision, step_reward=-1):
-        if len(self.stack) >= UPDATE_EVERY - 1:
-            action = self.memory.stack(self.stack[1]).to(device)
-            reward = self.memory.stack([1 if ad
-                                        else (c - 5 if collision else step_reward)
-                                        for ad, c in zip(self.stack[2], self.stack[4])]).to(device)
-            dones = self.memory.stack(self.stack[3]).to(device).float()
-            state = state.to(device)
-            next_state = next_state.to(device)
+        self.stack[0].append(state)
+        self.stack[1].append(action)
+        self.stack[2].append(next_state)
+        self.stack[3].append([[v or episode_done for k, v in a.items()
+                               if not hasattr(k, 'startswith')
+                               or not k.startswith('_')] for a in agent_done])
+        self.stack[4].append(collision)
+
+        if len(self.stack) >= UPDATE_EVERY:
+            action = torch.tensor(self.stack[1]).flatten(0, 1).to(device)
+            reward = torch.tensor([[[1 if ad
+                                     else (-5 if c else step_reward) for ad, c in zip(ad_batch, c_batch)]
+                                    for ad_batch, c_batch in zip(ad_step, c_step)]
+                                   for ad_step, c_step in zip(self.stack[3], self.stack[4])]).flatten(0, 1).to(device)
+            dones = torch.tensor(self.stack[3]).flatten(0, 1).to(device).float()
+            state = torch.cat(self.stack[0], 0).to(device)
+            next_state = torch.cat(self.stack[2], 0).to(device)
             state = torch.cat([state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
             next_state = torch.cat([next_state, torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
+            self.stack = [[] for _ in range(5)]
             self.learn(state, action, reward, next_state, dones)
-        else:
-            self.stack[0].append(state)
-            self.stack[1].append(action)
-            self.stack[2].append(next_state)
-            self.stack[3].append([[v or episode_done for k, v in a.items()
-                                   if not hasattr(k, 'startswith')
-                                   or not k.startswith('_')] for a in agent_done])
-            self.stack[4].append(collision)
 
     def learn(self, states, actions, rewards, next_states, dones):
         self.qnetwork_local.train()
@@ -117,15 +120,19 @@ class Agent:
         # Get expected Q values from local model
         Q_expected = self.qnetwork_local(states.squeeze(1))
 
-        Q_expected = Q_expected.gather(1, actions.unsqueeze(1))
-        Q_best_action = self.qnetwork_local(next_states.squeeze(1)).argmax(1)
-        Q_targets_next = self.qnetwork_target(next_states.squeeze(1)).gather(1, Q_best_action.unsqueeze(1))
+        if DOUBLE_DQN:
+            Q_expected = Q_expected.gather(1, actions.unsqueeze(1))
+            Q_best_action = self.qnetwork_local(next_states.squeeze(1)).argmax(1, keepdim=True)
+            Q_targets_next = self.qnetwork_target(next_states.squeeze(1)).gather(1, Q_best_action)
 
-        # Compute loss and perform a gradient step
-        self.optimizer.zero_grad()
-        loss = (GAMMA * Q_targets_next * (1 - dones.unsqueeze(-2)) - Q_expected - rewards.unsqueeze(-1)).square().mean()
+            # Compute loss and perform a gradient step
+            loss = (GAMMA * Q_targets_next * (1 - dones.unsqueeze(-2))
+                    - Q_expected - rewards.unsqueeze(-1)).square().mean()
+        else:
+            loss = (Q_expected.gather(1, actions.unsqueeze(1)) * rewards.unsqueeze(-1)).clamp(min=0).mean()
         loss.backward()
         self.optimizer.step()
+        self.optimizer.zero_grad()
 
         # Update the target network parameters to `tau * local.parameters() + (1 - tau) * target.parameters()`
         for target_param, local_param in zip(self.qnetwork_target.parameters(), self.qnetwork_local.parameters()):

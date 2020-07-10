@@ -283,8 +283,13 @@ class ConvNetwork(torch.nn.Module):
 
 def QNetwork(state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
              debug=True):
-    model = torch.nn.Sequential(WeightDropConv(state_size + 1, 11 * hidden_factor, bias=False),
-                                torch.nn.BatchNorm1d(11 * hidden_factor),
-                                Mish(),
-                                WeightDropConv(11 * hidden_factor, action_size))
-    return model
+    # model = torch.nn.Sequential(WeightDropConv(state_size + 1, 11 * hidden_factor, bias=False),
+    #                             torch.nn.BatchNorm1d(11 * hidden_factor),
+    #                             Mish(),
+    #                             WeightDropConv(11 * hidden_factor, action_size))
+    model = torch.nn.Sequential(torch.nn.Conv1d(state_size + 1, 20, 1, bias=False),
+                                torch.nn.BatchNorm1d(20),
+                                torch.nn.ReLU6(),
+                                torch.nn.Conv1d(20, action_size, 1))
+    print(model)
+    return torch.jit.script(model)
