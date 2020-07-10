@@ -36,7 +36,10 @@ class WeightDropConv(torch.nn.Module):
             self.bias = torch.nn.Parameter(torch.Tensor(out_features))
         else:
             self.register_parameter('bias', None)
-        self._kwargs = {'bias': self.bias, 'padding': padding, 'dilation': dilation, 'groups': groups, 'stride': stride}
+        self.padding = padding
+        self.dilation = dilation
+        self.groups = groups
+        self.stride = stride
         self._function = function
 
     def forward(self, fn_input):
@@ -45,7 +48,13 @@ class WeightDropConv(torch.nn.Module):
         else:
             weight = self.weight
 
-        return self._function(fn_input, weight, **self._kwargs)
+        return self._function(fn_input,
+                              weight,
+                              bias=self.bias,
+                              padding=self.padding,
+                              dilation=self.dilation,
+                              groups=self.groups,
+                              stride=self.stride)
 
     def extra_repr(self):
         return 'in_features={}, out_features={}'.format(self.in_features, self.out_features)
@@ -283,13 +292,16 @@ class ConvNetwork(torch.nn.Module):
 
 def QNetwork(state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
              debug=True):
+    # SOMEWHAT OKAYISH
     # model = torch.nn.Sequential(WeightDropConv(state_size + 1, 11 * hidden_factor, bias=False),
     #                             torch.nn.BatchNorm1d(11 * hidden_factor),
     #                             Mish(),
     #                             WeightDropConv(11 * hidden_factor, action_size))
+
+    # FAST DEBUG
     model = torch.nn.Sequential(torch.nn.Conv1d(state_size + 1, 20, 1, bias=False),
                                 torch.nn.BatchNorm1d(20),
-                                torch.nn.ReLU6(),
+                                Mish(),
                                 torch.nn.Conv1d(20, action_size, 1))
     print(model)
     return torch.jit.script(model)

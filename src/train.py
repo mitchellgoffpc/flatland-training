@@ -1,5 +1,4 @@
 import argparse
-import copy
 import time
 from itertools import zip_longest
 from pathlib import Path
@@ -92,8 +91,9 @@ environments = [RailEnv(width=flags.grid_width, height=flags.grid_height, number
                             MalfunctionParameters(1 / 8000, 15, 50)),
                         obs_builder_object=(GlobalObsForRailEnv()
                                             if flags.global_environment
-                                            else TreeObservation(max_depth=flags.tree_depth))
-                        ) for _ in range(BATCH_SIZE)]
+                                            else TreeObservation(max_depth=flags.tree_depth)),
+                        random_seed=i)
+                for i in range(BATCH_SIZE)]
 env = environments[0]
 
 # After training we want to render the results so we also load a renderer
@@ -154,8 +154,10 @@ POOL = multiprocessing.Pool()
 for episode in range(start + 1, flags.num_episodes + 1):
     agent.reset()
     obs, info = zip(*[env.reset(True, True) for env in environments])
+
     score, steps_taken, collision = 0, 0, False
     agent_count = len(obs[0])
+    print(agent_count)
     agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
     normalize(obs, agent_obs)
     agent_obs_buffer = agent_obs.clone()
@@ -226,7 +228,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
     current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
 
-    print(f'\rBatch {episode:<4} - Episode {BATCH_SIZE * episode:<6}'
+    print(f'\rBatch {episode:>4} - Episode {BATCH_SIZE * episode:>6}'
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'
