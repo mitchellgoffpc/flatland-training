@@ -70,11 +70,11 @@ class TreeObservation(ObservationBuilder):
 
         # Now we create a graph representation of the rail network, starting from this node
         transitions = self.get_all_transitions(position)
-        root_nodes = [RailNode(position, t, self.is_target(position)) for t in transitions if t]
-        self.graph = {(*position, d): n for d, n in enumerate(root_nodes)}
+        root_nodes = {t: RailNode(position, t, self.is_target(position)) for t in transitions if t}
+        self.graph = {(*position, d): root_nodes[t] for d, t in enumerate(transitions) if t}
 
-        for node in root_nodes:
-            for direction in node.edge_directions:
+        for transitions, node in root_nodes.items():
+            for direction in transitions:
                 self.explore_branch(node, get_new_position(position, direction), direction)
 
     def explore_branch(self, node, position, direction):
