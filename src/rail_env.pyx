@@ -6,26 +6,23 @@ import random
 from enum import IntEnum
 from typing import List, NamedTuple, Optional, Dict
 
-import msgpack
 import msgpack_numpy as m
 import numpy as np
-from gym.utils import seeding
-from msgpack import Packer
-
 from flatland.core.env import Environment
 from flatland.core.env_observation_builder import ObservationBuilder
 from flatland.core.grid.grid4 import Grid4TransitionsEnum, Grid4Transitions
 from flatland.core.grid.grid4_utils import get_new_position
 from flatland.core.grid.grid_utils import IntVector2D
 from flatland.core.transition_map import GridTransitionMap
-from flatland.envs.agent_utils import EnvAgent, RailAgentStatus
-from flatland.envs.distance_map import DistanceMap
-
 # Need to use circular imports for persistence.
 from flatland.envs import malfunction_generators as mal_gen
+from flatland.envs import persistence
 from flatland.envs import rail_generators as rail_gen
 from flatland.envs import schedule_generators as sched_gen
-from flatland.envs import persistence
+from flatland.envs.agent_utils import EnvAgent, RailAgentStatus
+from flatland.envs.distance_map import DistanceMap
+from flatland.envs.observations import GlobalObsForRailEnv
+from gym.utils import seeding
 
 # Direct import of objects / classes does not work with circular imports.
 # from flatland.envs.malfunction_generators import no_malfunction_generator, Malfunction, MalfunctionProcessData
@@ -33,11 +30,6 @@ from flatland.envs import persistence
 # from flatland.envs.rail_generators import random_rail_generator, RailGenerator
 # from flatland.envs.schedule_generators import random_schedule_generator, ScheduleGenerator
 
-from flatland.envs.observations import GlobalObsForRailEnv
-
-
-
-import pickle
 
 m.patch()
 
@@ -131,10 +123,10 @@ class RailEnv(Environment):
                  width,
                  height,
                  rail_generator = None,
-                 schedule_generator = None, # : sched_gen.ScheduleGenerator = sched_gen.random_schedule_generator(),
+                 schedule_generator = None,  # : sched_gen.ScheduleGenerator = sched_gen.random_schedule_generator(),
                  number_of_agents=1,
                  obs_builder_object: ObservationBuilder = GlobalObsForRailEnv(),
-                 malfunction_generator_and_process_data=None, #mal_gen.no_malfunction_generator(),
+                 malfunction_generator_and_process_data=None,  #mal_gen.no_malfunction_generator(),
                  remove_agents_at_target=True,
                  random_seed=1,
                  record_steps=False
@@ -231,7 +223,7 @@ class RailEnv(Environment):
         self.record_steps = record_steps  # whether to save timesteps
         # save timesteps in here: [[[row, col, dir, malfunction],...nAgents], ...nSteps]
         self.cur_episode = []
-        self.list_actions = [] # save actions in here
+        self.list_actions = []  # save actions in here
 
     def _seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -264,8 +256,6 @@ class RailEnv(Environment):
             agent.reset()
         self.active_agents = [i for i in range(len(self.agents))]
 
-
-
     def action_required(self, agent):
         """
         Check if an agent needs to provide an action
@@ -281,8 +271,8 @@ class RailEnv(Environment):
         False: Agent cannot provide an action
         """
         return (agent.status == RailAgentStatus.READY_TO_DEPART or (
-            agent.status == RailAgentStatus.ACTIVE and np.isclose(agent.speed_data['position_fraction'], 0.0,
-                                                                  rtol=1e-03)))
+                agent.status == RailAgentStatus.ACTIVE and np.isclose(agent.speed_data['position_fraction'], 0.0,
+                                                                      rtol=1e-03)))
 
     def reset(self, regenerate_rail: bool = True, regenerate_schedule: bool = True, activate_agents: bool = False,
               random_seed: bool = None) -> (Dict, Dict):
@@ -328,8 +318,6 @@ class RailEnv(Environment):
 
         if optionals and 'distance_map' in optionals:
             self.distance_map.set(optionals['distance_map'])
-
-
 
         if regenerate_schedule or regenerate_rail or self.get_num_agents() == 0:
             agents_hints = None
@@ -569,8 +557,8 @@ class RailEnv(Environment):
                 self.rewards_dict[i_agent] += self.stop_penalty
 
             if not agent.moving and not (
-                action == RailEnvActions.DO_NOTHING or
-                action == RailEnvActions.STOP_MOVING):
+                    action == RailEnvActions.DO_NOTHING or
+                    action == RailEnvActions.STOP_MOVING):
                 # Allow agent to start with any forward or direction action
                 agent.moving = True
                 self.rewards_dict[i_agent] += self.start_penalty
@@ -704,11 +692,11 @@ class RailEnv(Environment):
         new_position = get_new_position(agent.position, new_direction)
 
         new_cell_valid = (
-            np.array_equal(  # Check the new position is still in the grid
-                new_position,
-                np.clip(new_position, [0, 0], [self.height - 1, self.width - 1]))
-            and  # check the new position has some transitions (ie is not an empty cell)
-            self.rail.get_full_transitions(*new_position) > 0)
+                np.array_equal(  # Check the new position is still in the grid
+                    new_position,
+                    np.clip(new_position, [0, 0], [self.height - 1, self.width - 1]))
+                and  # check the new position has some transitions (ie is not an empty cell)
+                self.rail.get_full_transitions(*new_position) > 0)
 
         # If transition validity hasn't been checked yet.
         if transition_valid is None:
@@ -740,7 +728,7 @@ class RailEnv(Environment):
                 pos = (int(agent.position[0]), int(agent.position[1]))
             # print("pos:", pos, type(pos[0]))
             list_agents_state.append(
-                [*pos, int(agent.direction), agent.malfunction_data["malfunction"] ])
+                [*pos, int(agent.direction), agent.malfunction_data["malfunction"]])
 
         self.cur_episode.append(list_agents_state)
         self.list_actions.append(dActions)
@@ -828,8 +816,6 @@ class RailEnv(Environment):
         """
         return Grid4Transitions.get_entry_directions(self.rail.get_full_transitions(row, col))
 
-
-
     def _exp_distirbution_synced(self, rate: float) -> float:
         """
         Generates sample from exponential distribution
@@ -858,5 +844,3 @@ class RailEnv(Environment):
     def save(self, filename):
         print("deprecated call to env.save() - pls call RailEnvPersister.save()")
         persistence.RailEnvPersister.save(self, filename)
-
-
