@@ -684,7 +684,7 @@ class RailEnv(Environment):
         # cell used to check for invalid actions
         cdef tuple act_chk = self.check_action(agent, action)
         cdef int new_direction = act_chk[0]
-        cdef bint transition_valid = act_chk[1]
+        transition_valid = act_chk[1]
         cdef bint cell_free = False
         cdef tuple new_position = get_new_position(agent.position, new_direction)
 
@@ -694,7 +694,10 @@ class RailEnv(Environment):
                     np.clip(new_position, [0, 0], [self.height - 1, self.width - 1]))
                 and  # check the new position has some transitions (ie is not an empty cell)
                 self.rail.get_full_transitions(*new_position) > 0)
-
+        if transition_valid is None:
+            transition_valid = self.rail.get_transition(
+                (*agent.position, agent.direction),
+                new_direction)
         # only call cell_free() if new cell is inside the scene
         if new_cell_valid:
             # Check the new position is not the same as any of the existing agent positions
@@ -755,7 +758,7 @@ class RailEnv(Environment):
 
 
         """
-        cdef bint transition_valid = False
+        transition_valid = None
         cdef tuple possible_transitions = self.rail.get_transitions(*agent.position, agent.direction)
         cdef int num_transitions = np.count_nonzero(possible_transitions)
         cdef int new_direction = agent.direction
