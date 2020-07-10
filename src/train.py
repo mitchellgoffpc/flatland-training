@@ -7,18 +7,19 @@ from pathlib import Path
 import torch
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
 from flatland.envs.observations import GlobalObsForRailEnv
-from flatland.envs.rail_env import RailEnv
 from pathos import multiprocessing
 
 positive_infinity = int(1e5)
 negative_infinity = -positive_infinity
 
 try:
+    from .rail_env import RailEnv
     from .agent import Agent as DQN_Agent, device, BATCH_SIZE
     from .normalize_output_data import wrap
     from .observation_utils import normalize_observation, TreeObservation
     from .railway_utils import load_precomputed_railways, create_random_railways
 except:
+    from rail_env import RailEnv
     from agent import Agent as DQN_Agent, device, BATCH_SIZE
     from normalize_output_data import wrap
     from observation_utils import normalize_observation, TreeObservation
