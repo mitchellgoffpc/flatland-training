@@ -17,10 +17,12 @@ parser = argparse.ArgumentParser(description="Train an agent in the flatland env
 parser.add_argument("--agents", type=int, default=3, help="Number of episodes to train for")
 parser.add_argument("--cities", type=int, default=3, help="Number of episodes to train for")
 parser.add_argument("--width", type=int, default=35, help="Decay factor for epsilon-greedy exploration")
+parser.add_argument("--height", type=int, default=None, help="Decay factor for epsilon-greedy exploration")
 
 flags = parser.parse_args()
 
-width = height = flags.width
+width = flags.width
+height = width if flags.height is None else flags.height
 n_agents = flags.agents
 rail_generator, schedule_generator = create_random_railways(project_root, flags.cities)
 
@@ -48,7 +50,7 @@ manager = multiprocessing.Manager()
 shared_schedules = manager.list(schedules)
 shared_rail_networks = manager.list(rail_networks)
 # Generate 10000 random railways in 100 batches of 100
-for _ in tqdm(range(100), ncols=120, leave=False):
+for _ in tqdm(range(500), ncols=150, leave=False):
     do(schedules, rail_networks)
     with open(project_root / f'railroads/rail_networks_{n_agents}x{width}x{height}.pkl', 'wb') as file:
         pickle.dump(schedules, file, protocol=4)

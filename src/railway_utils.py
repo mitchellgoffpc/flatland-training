@@ -41,11 +41,16 @@ class Generator:
 
 
 # Helper function to load in precomputed railway networks
-def load_precomputed_railways(project_root, start_index):
+def load_precomputed_railways(project_root, start_index, big=False):
     prefix = os.path.join(project_root, 'railroads')
-    suffix = f'_sum.pkl'
-    rail = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
-    sched = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
+    if big:
+        suffix = f'_50x35x20.pkl'
+    else:
+        suffix = f'_3x30x30.pkl'
+    sched = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
+    rail = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
+    if big:
+        sched, rail = rail, sched
     print(f"Working on {len(rail)} tracks")
     return rail, sched
 
@@ -59,6 +64,6 @@ def create_random_railways(project_root, max_cities=5):
         1 / 4.: 0.0}  # Slow freight train
 
     rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=max_cities,
-                                           max_rails_between_cities=max_cities - 1, max_rails_in_city=max_cities - 1)
+                                           max_rails_between_cities=2, max_rails_in_city=3)
     schedule_generator = sparse_schedule_generator(speed_ratio_map)
     return rail_generator, schedule_generator

@@ -88,7 +88,7 @@ environments = [RailEnv(width=flags.grid_width, height=flags.grid_height, number
                         rail_generator=rail_generator,
                         schedule_generator=schedule_generator,
                         malfunction_generator_and_process_data=malfunction_from_params(
-                            MalfunctionParameters(1 / 8000, 15, 50)),
+                            MalfunctionParameters(1 / 500, 20, 50)),
                         obs_builder_object=(GlobalObsForRailEnv()
                                             if flags.global_environment
                                             else TreeObservation(max_depth=flags.tree_depth)),
@@ -153,11 +153,10 @@ POOL = multiprocessing.Pool()
 # Main training loop
 for episode in range(start + 1, flags.num_episodes + 1):
     agent.reset()
-    obs, info = zip(*[env.reset(True, True) for env in environments])
+    obs, info = zip(*[env.reset() for env in environments])
 
     score, steps_taken, collision = 0, 0, False
     agent_count = len(obs[0])
-    print(agent_count)
     agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
     normalize(obs, agent_obs)
     agent_obs_buffer = agent_obs.clone()

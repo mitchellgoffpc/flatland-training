@@ -13,9 +13,10 @@ except:
 import os
 
 BUFFER_SIZE = 500_000
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 GAMMA = 0.998
 TAU = 1e-3
+CLIP_FACTOR = 0.2
 LR = 2e-4
 UPDATE_EVERY = 1
 DOUBLE_DQN = False
@@ -33,20 +34,21 @@ class Agent:
             network = ConvNetwork
         else:
             network = QNetwork
-        self.qnetwork_local = network(state_size,
-                                      action_size,
-                                      hidden_factor,
-                                      model_depth,
-                                      kernel_size,
-                                      squeeze_heads).to(device)
-        self.qnetwork_target = network(state_size,
-                                       action_size,
-                                       hidden_factor,
-                                       model_depth,
-                                       kernel_size,
-                                       squeeze_heads,
-                                       debug=False).to(device)
-        self.optimizer = Optimizer(self.qnetwork_local.parameters(), lr=LR, weight_decay=1e-2)
+        self.policy = network(state_size,
+                              action_size,
+                              hidden_factor,
+                              model_depth,
+                              kernel_size,
+                              squeeze_heads).to(device)
+        self.old_policy = network(state_size,
+                                  action_size,
+                                  hidden_factor,
+                                  model_depth,
+                                  kernel_size,
+                                  squeeze_heads,
+                                  debug=False).to(device)
+        self.old_policy.load_state_dict(self.policy.state_dict())
+        self.optimizer = Optimizer(self.policy.parameters(), lr=LR, weight_decay=1e-2)
 
         # Replay memory
         self.memory = ReplayBuffer(BATCH_SIZE)
@@ -62,9 +64,9 @@ class Agent:
         agent_count = len(state)
         state = torch.stack(state, -1).unsqueeze(0).to(device)
         state = torch.cat([state, torch.randn(1, 1, state.size(-1), device=device)], 1)
-        self.qnetwork_local.eval()
+        self.policy.eval()
         with torch.no_grad():
-            action_values = self.qnetwork_local(state)
+            action_values = self.policy(state)
 
         # Epsilon-greedy action selection
         return [torch.argmax(action_values[:, :, i], 1).item()
@@ -75,9 +77,9 @@ class Agent:
     def multi_act(self, state, eps=0.):
         agent_count = state.size(-1)
         state = torch.cat([state.to(device), torch.randn(state.size(0), 1, state.size(-1), device=device)], 1)
-        self.qnetwork_local.eval()
+        self.policy.eval()
         with torch.no_grad():
-            action_values = self.qnetwork_local(state)
+            action_values = self.policy(state)
 
         # Epsilon-greedy action selection
         return [[torch.argmax(act[:, i], 0).item()
@@ -112,31 +114,21 @@ class Agent:
             self.learn(state, action, reward, next_state, dones)
 
     def learn(self, states, actions, rewards, next_states, dones):
-        self.qnetwork_local.train()
+        self.policy.train()
 
-        actions.squeeze_(-1)
-        dones.squeeze_(-1)
+        responsible_outputs = torch.gather(self.policy(states), 1, actions)
+        old_responsible_outputs = torch.gather(self.old_policy(states), 1, actions).detach()
 
-        # Get expected Q values from local model
-        Q_expected = self.qnetwork_local(states.squeeze(1))
+        # rewards = rewards - rewards.mean()
+        ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
+        clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
+        loss = -torch.min(ratio * rewards, clamped_ratio * rewards).mean()
 
-        if DOUBLE_DQN:
-            Q_expected = Q_expected.gather(1, actions.unsqueeze(1))
-            Q_best_action = self.qnetwork_local(next_states.squeeze(1)).argmax(1, keepdim=True)
-            Q_targets_next = self.qnetwork_target(next_states.squeeze(1)).gather(1, Q_best_action)
-
-            # Compute loss and perform a gradient step
-            loss = (GAMMA * Q_targets_next * (1 - dones.unsqueeze(-2))
-                    - Q_expected - rewards.unsqueeze(-1)).square().mean()
-        else:
-            loss = (Q_expected.gather(1, actions.unsqueeze(1)) * rewards.unsqueeze(-1)).clamp(min=0).mean()
+        # Compute loss and perform a gradient step
+        self.old_policy.load_state_dict(self.policy.state_dict())
+        self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        self.optimizer.zero_grad()
-
-        # Update the target network parameters to `tau * local.parameters() + (1 - tau) * target.parameters()`
-        for target_param, local_param in zip(self.qnetwork_target.parameters(), self.qnetwork_local.parameters()):
-            target_param.data.copy_(TAU * local_param.data + (1.0 - TAU) * target_param.data)
 
     # Checkpointing methods
 

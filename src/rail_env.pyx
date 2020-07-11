@@ -3,14 +3,13 @@ Definition of the RailEnv environment.
 """
 import random
 # TODO:  _ this is a global method --> utils or remove later
-from enum import IntEnum
 from typing import List, NamedTuple, Optional, Dict
 
 import msgpack_numpy as m
 import numpy as np
 from flatland.core.env import Environment
 from flatland.core.env_observation_builder import ObservationBuilder
-from flatland.core.grid.grid4 import Grid4TransitionsEnum, Grid4Transitions
+from flatland.core.grid.grid4 import Grid4Transitions
 from flatland.core.grid.grid4_utils import get_new_position
 from flatland.core.grid.grid_utils import IntVector2D
 from flatland.core.transition_map import GridTransitionMap
@@ -33,7 +32,6 @@ from gym.utils import seeding
 
 m.patch()
 
-
 cdef int DO_NOTHING = 0  # implies change of direction in a dead-end!
 cdef int MOVE_LEFT = 1
 cdef int MOVE_FORWARD = 2
@@ -49,7 +47,6 @@ cpdef str to_char(a: int):
         3: 'R',
         4: 'S',
     }[a]
-
 
 RailEnvGridPos = NamedTuple('RailEnvGridPos', [('r', int), ('c', int)])
 
@@ -205,11 +202,9 @@ class RailEnv(Environment):
 
         self.action_space = [5]
 
-        self._seed()
-        self._seed()
         self.random_seed = random_seed
-        if self.random_seed:
-            self._seed(seed=random_seed)
+        self.np_random, seed = seeding.np_random(random_seed)
+        random.seed(seed)
 
         self.valid_positions = None
 
@@ -222,29 +217,8 @@ class RailEnv(Environment):
         self.cur_episode = []
         self.list_actions = []  # save actions in here
 
-    def _seed(self, seed=None):
-        self.np_random, seed = seeding.np_random(seed)
-        random.seed(seed)
-        return [seed]
-
-    # no more agent_handles
-    def get_agent_handles(self):
-        return range(self.get_num_agents())
-
     def get_num_agents(self) -> int:
         return len(self.agents)
-
-    def add_agent(self, agent):
-        """ Add static info for a single agent.
-            Returns the index of the new agent.
-        """
-        self.agents.append(agent)
-        return len(self.agents) - 1
-
-    def set_agent_active(self, agent: EnvAgent):
-        if agent.status == RailAgentStatus.READY_TO_DEPART and self.cell_free(agent.initial_position):
-            agent.status = RailAgentStatus.ACTIVE
-            self._set_agent_to_initial_position(agent, agent.initial_position)
 
     def reset_agents(self):
         """ Reset the agents to their starting positions
@@ -271,9 +245,7 @@ class RailEnv(Environment):
                 agent.status == RailAgentStatus.ACTIVE and np.isclose(agent.speed_data['position_fraction'], 0.0,
                                                                       rtol=1e-03)))
 
-    def reset(self, bint regenerate_rail: bool = True, bint regenerate_schedule: bool = True,
-              bint activate_agents: bool = False,
-              bint random_seed: bool = False) -> (Dict, Dict):
+    def reset(self) -> (Dict, Dict):
         """
         reset(regenerate_rail, regenerate_schedule, activate_agents, random_seed)
 
@@ -298,37 +270,32 @@ class RailEnv(Environment):
 
         """
 
-        if random_seed:
-            self._seed(random_seed)
-
         cdef dict optionals = {}
-        if regenerate_rail or self.rail is None:
-            rail, optionals = self.rail_generator(self.width, self.height, self.number_of_agents, self.num_resets,
-                                                  self.np_random)
+        rail, optionals = self.rail_generator(self.width, self.height, self.number_of_agents, self.num_resets,
+                                              self.np_random)
 
-            self.rail = rail
-            self.height, self.width = self.rail.grid.shape
+        self.rail = rail
+        self.height, self.width = self.rail.grid.shape
 
-            # Do a new set_env call on the obs_builder to ensure
-            # that obs_builder specific instantiations are made according to the
-            # specifications of the current environment : like width, height, etc
-            self.obs_builder.set_env(self)
+        # Do a new set_env call on the obs_builder to ensure
+        # that obs_builder specific instantiations are made according to the
+        # specifications of the current environment : like width, height, etc
+        self.obs_builder.set_env(self)
 
         if optionals and 'distance_map' in optionals:
             self.distance_map.set(optionals['distance_map'])
 
-        if regenerate_schedule or regenerate_rail or self.get_num_agents() == 0:
-            agents_hints = None
-            if optionals and 'agents_hints' in optionals:
-                agents_hints = optionals['agents_hints']
+        agents_hints = None
+        if optionals and 'agents_hints' in optionals:
+            agents_hints = optionals['agents_hints']
 
-            schedule = self.schedule_generator(self.rail, self.number_of_agents, agents_hints, self.num_resets,
-                                               self.np_random)
-            self.agents = EnvAgent.from_schedule(schedule)
+        schedule = self.schedule_generator(self.rail, self.number_of_agents, agents_hints, self.num_resets,
+                                           self.np_random)
+        self.agents = EnvAgent.from_schedule(schedule)
 
-            # Get max number of allowed time steps from schedule generator
-            # Look at the specific schedule generator used to see where this number comes from
-            self._max_episode_steps = schedule.max_episode_steps
+        # Get max number of allowed time steps from schedule generator
+        # Look at the specific schedule generator used to see where this number comes from
+        self._max_episode_steps = schedule.max_episode_steps
 
         self.agent_positions = np.zeros((self.height, self.width), dtype=int) - 1
 
@@ -336,9 +303,6 @@ class RailEnv(Environment):
         self.reset_agents()
 
         for agent in self.agents:
-            # Induce malfunctions
-            if activate_agents:
-                self.set_agent_active(agent)
 
             self._break_agent(agent)
 
@@ -365,13 +329,13 @@ class RailEnv(Environment):
         self.cur_episode = []
 
         cdef dict info_dict = {
-                'action_required': {i: self.action_required(agent) for i, agent in enumerate(self.agents)},
-                'malfunction': {
-                    i: agent.malfunction_data['malfunction'] for i, agent in enumerate(self.agents)
-                },
-                'speed': {i: agent.speed_data['speed'] for i, agent in enumerate(self.agents)},
-                'status': {i: agent.status for i, agent in enumerate(self.agents)}
-            }
+            'action_required': {i: self.action_required(agent) for i, agent in enumerate(self.agents)},
+            'malfunction': {
+                i: agent.malfunction_data['malfunction'] for i, agent in enumerate(self.agents)
+            },
+            'speed': {i: agent.speed_data['speed'] for i, agent in enumerate(self.agents)},
+            'status': {i: agent.status for i, agent in enumerate(self.agents)}
+        }
         # Return the new observation vectors for each agent
         cdef dict observation_dict = self._get_observations()
         return observation_dict, info_dict
@@ -535,7 +499,7 @@ class RailEnv(Environment):
             if action is None:
                 action = DO_NOTHING
 
-            if action < 0 or action > ACTION_COUNT: #
+            if action < 0 or action > ACTION_COUNT:  #
                 print('ERROR: illegal action=', action,
                       'for agent with index=', i_agent,
                       '"DO NOTHING" will be executed instead')
