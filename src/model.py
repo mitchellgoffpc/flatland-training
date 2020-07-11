@@ -1,5 +1,6 @@
 import typing
-
+import numpy as np
+import math
 import torch
 
 
@@ -292,16 +293,17 @@ class ConvNetwork(torch.nn.Module):
 
 def QNetwork(state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
              debug=True):
-    # SOMEWHAT OKAYISH
-    # model = torch.nn.Sequential(WeightDropConv(state_size + 1, 11 * hidden_factor, bias=False),
-    #                             torch.nn.BatchNorm1d(11 * hidden_factor),
-    #                             Mish(),
-    #                             WeightDropConv(11 * hidden_factor, action_size))
-
-    # FAST DEBUG
-    model = torch.nn.Sequential(torch.nn.Conv1d(state_size + 1, 20, 1, bias=False),
-                                torch.nn.BatchNorm1d(20),
+    model = torch.nn.Sequential(torch.nn.Conv1d(2*state_size, 33, 1, groups=11, bias=False),
+                                torch.nn.BatchNorm1d(33),
                                 Mish(),
-                                torch.nn.Conv1d(20, action_size, 1))
-    print(model)
+                                WeightDropConv(33, 33),
+                                torch.nn.BatchNorm1d(33),
+                                Mish(),
+                                WeightDropConv(33, action_size, 1))
+    if debug:
+        parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, model.parameters()))
+        digits = int(math.log10(parameters))
+        number_string = " kMGTPEZY"[digits // 3]
+
+        print(f"[DEBUG/MODEL] Training with {parameters * 10 ** -(digits // 3 * 3):.1f}{number_string} parameters")
     return torch.jit.script(model)

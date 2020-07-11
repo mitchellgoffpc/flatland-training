@@ -41,7 +41,7 @@ class Generator:
 
 
 # Helper function to load in precomputed railway networks
-def load_precomputed_railways(project_root, start_index, big=False):
+def load_precomputed_railways(project_root, start_index, big=True):
     prefix = os.path.join(project_root, 'railroads')
     if big:
         suffix = f'_50x35x20.pkl'

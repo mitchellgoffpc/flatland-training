@@ -167,9 +167,9 @@ for episode in range(start + 1, flags.num_episodes + 1):
     for step in range(max_steps):
         update_values = [[False] * agent_count for _ in range(BATCH_SIZE)]
         action_dict = [{} for _ in range(BATCH_SIZE)]
-
+        input_tensor = torch.cat([agent_obs_buffer.flatten(1, 2), agent_obs.flatten(1, 2)], 1)
         if any(any(inf['action_required']) for inf in info):
-            ret_action = agent.multi_act(agent_obs.flatten(1, 2), eps=eps)
+            ret_action = agent.multi_act(input_tensor, eps=eps)
         else:
             ret_action = update_values
         for idx, act_list in enumerate(ret_action):
@@ -194,11 +194,9 @@ for episode in range(start + 1, flags.num_episodes + 1):
 
         # Update replay buffer and train agent
         if flags.train and (any(update_values) or all_done or all(any(d) for d in done)):
-            agent.step(agent_obs_buffer.flatten(1, 2),
+            agent.step(input_tensor,
                        agent_action_buffer,
-                       agent_obs.flatten(1, 2),
                        done,
-                       all_done,
                        [[is_collision(a, i) for a in range(agent_count)] for i in range(BATCH_SIZE)],
                        flags.step_reward)
             agent_obs_buffer = agent_obs.clone()
