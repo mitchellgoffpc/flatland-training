@@ -1,6 +1,7 @@
-import typing
-import numpy as np
 import math
+import typing
+
+import numpy as np
 import torch
 
 
@@ -26,8 +27,6 @@ class WeightDropConv(torch.nn.Module):
                  padding=0, dilation=1, function=torch.nn.functional.conv1d, stride=1):
         super().__init__()
         self.weight_dropout = weight_dropout
-        self.in_features = in_features
-        self.out_features = out_features
         if in_features % groups != 0:
             print(f"[ERROR] Unable to get weight for in={in_features},groups={groups}. Make sure they are divisible.")
         if out_features % groups != 0:
@@ -44,21 +43,13 @@ class WeightDropConv(torch.nn.Module):
         self._function = function
 
     def forward(self, fn_input):
-        if self.training:
-            weight = self.weight.bernoulli(p=self.weight_dropout) * self.weight
-        else:
-            weight = self.weight
-
         return self._function(fn_input,
-                              weight,
+                              torch.nn.functional.dropout(self.weight, self.weight_dropout, self.training),
                               bias=self.bias,
                               padding=self.padding,
                               dilation=self.dilation,
                               groups=self.groups,
                               stride=self.stride)
-
-    def extra_repr(self):
-        return 'in_features={}, out_features={}'.format(self.in_features, self.out_features)
 
 
 class SeparableConvolution(torch.nn.Module):
@@ -228,7 +219,15 @@ class ConvNetwork(torch.nn.Module):
         out = self.linear1(mish(self.mid_norm(self.linear0(mish(self.init_norm(out))))))
         return out
 
-
+def init(module: torch.nn.Module):
+    if hasattr(module, "weight") and hasattr(module.weight, "data"):
+        if "norm" in module.__class__.__name__.lower() or (
+                hasattr(module, "__str__") and "norm" in str(module).lower()):
+            torch.nn.init.uniform_(module.weight.data, 0.998, 1.002)
+        else:
+            torch.nn.init.orthogonal_(module.weight.data)
+    if hasattr(module, "bias") and hasattr(module.bias, "data"):
+        torch.nn.init.constant_(module.bias.data, 0)
 # class QNetwork(torch.nn.Module):
 #     def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
 #                  debug=True):
@@ -263,15 +262,6 @@ class ConvNetwork(torch.nn.Module):
 #                                          kernel_size=kernel_size,
 #                                          squeeze_heads=squeeze_heads)])
 #
-#         def init(module: torch.nn.Module):
-#             if hasattr(module, "weight") and hasattr(module.weight, "data"):
-#                 if "norm" in module.__class__.__name__.lower() or (
-#                         hasattr(module, "__str__") and "norm" in str(module).lower()):
-#                     torch.nn.init.uniform_(module.weight.data, 0.998, 1.002)
-#                 else:
-#                     torch.nn.init.orthogonal_(module.weight.data)
-#             if hasattr(module, "bias") and hasattr(module.bias, "data"):
-#                 torch.nn.init.constant_(module.bias.data, 0)
 #
 #         net.apply(init)
 #
@@ -291,19 +281,32 @@ class ConvNetwork(torch.nn.Module):
 #             out = module(out)
 #         return out
 
+class Residual(torch.nn.Module):
+    def __init__(self, features):
+        super(Residual, self).__init__()
+        self.norm = torch.nn.BatchNorm1d(features)
+        self.conv = WeightDropConv(features, features)
+
+    def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
+        return self.conv(mish(self.norm(fn_input))) + fn_input
+
+
 def QNetwork(state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
              debug=True):
-    model = torch.nn.Sequential(torch.nn.Conv1d(2*state_size, 33, 1, groups=11, bias=False),
-                                torch.nn.BatchNorm1d(33),
+    model = torch.nn.Sequential(torch.nn.Conv1d(2 * state_size, 55, 1, groups=11, bias=False),
+                                Residual(55),
+                                torch.nn.BatchNorm1d(55),
                                 Mish(),
-                                WeightDropConv(33, 33),
-                                torch.nn.BatchNorm1d(33),
-                                Mish(),
-                                WeightDropConv(33, action_size, 1))
+                                WeightDropConv(55, action_size, 1))
     if debug:
         parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, model.parameters()))
         digits = int(math.log10(parameters))
         number_string = " kMGTPEZY"[digits // 3]
 
         print(f"[DEBUG/MODEL] Training with {parameters * 10 ** -(digits // 3 * 3):.1f}{number_string} parameters")
-    return torch.jit.script(model)
+    model.apply(init)
+    try:
+        model = torch.jit.script(model)
+    except TypeError:
+        pass
+    return model
