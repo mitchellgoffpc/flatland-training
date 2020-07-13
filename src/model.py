@@ -147,7 +147,7 @@ class Residual(torch.nn.Module):
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         out, exc = self.conv(mish(self.norm(fn_input))).chunk(2, 1)
-        exc = exc.mean(dim=1, keepdim=True).tanh()
+        exc = exc.mean(dim=-1, keepdim=True).tanh()
         fn_input = fn_input * exc
         out = -out * exc
         return fn_input + out
