@@ -8,6 +8,8 @@ from flatland.envs.malfunction_generators import malfunction_from_params, Malfun
 from flatland.envs.observations import GlobalObsForRailEnv
 from pathos import multiprocessing
 
+torch.jit.optimized_execution(True)
+
 positive_infinity = int(1e5)
 negative_infinity = -positive_infinity
 
@@ -32,7 +34,7 @@ boolean = lambda x: str(x).lower() == 'true'
 parser.add_argument("--train", type=boolean, default=True, help="Whether to train the model or just evaluate it")
 parser.add_argument("--load-model", default=False, action='store_true',
                     help="Whether to load the model from the last checkpoint")
-parser.add_argument("--load-railways", type=boolean, default=True,
+parser.add_argument("--load-railways", type=boolean, default=False,
                     help="Whether to load in pre-generated railway networks")
 parser.add_argument("--report-interval", type=int, default=100, help="Iterations between reports")
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
@@ -51,7 +53,8 @@ parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the o
 parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
 parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of episodes to train for")
 parser.add_argument("--epsilon-decay", type=float, default=0, help="Decay factor for epsilon-greedy exploration")
-parser.add_argument("--step-reward", type=float, default=-1, help="Depth of the observation tree")
+parser.add_argument("--step-reward", type=float, default=-1e-2, help="Depth of the observation tree")
+parser.add_argument("--collision-reward", type=float, default=-2, help="Depth of the observation tree")
 parser.add_argument("--global-environment", type=boolean, default=False, help="Depth of the observation tree")
 parser.add_argument("--threads", type=int, default=1, help="Depth of the observation tree")
 
@@ -81,7 +84,7 @@ else:
 if flags.load_railways:
     rail_generator, schedule_generator = load_precomputed_railways(project_root, start)
 else:
-    rail_generator, schedule_generator = create_random_railways(project_root)
+    rail_generator, schedule_generator = create_random_railways(1.1)
 
 # Create the Flatland environment
 environments = [RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
@@ -99,7 +102,7 @@ env = environments[0]
 # After training we want to render the results so we also load a renderer
 
 # Add some variables to keep track of the progress
-current_score = current_steps = current_collisions = current_done = mean_score = mean_steps = mean_collisions = mean_done = current_taken = mean_taken = 0
+current_score = current_steps = current_collisions = current_done = mean_score = mean_steps = mean_collisions = mean_done = current_taken = mean_taken = None
 
 agent_action_buffer = []
 start_time = time.time()
@@ -126,7 +129,7 @@ def is_collision(a, i):
 
 
 def get_means(x, y, c, s):
-    return (x * 3 + c) / 4, (y * (s - 1) + c) / s
+    return c if x is None else (x * 3 + c) / 4, c if y is None else (y * (s - 1) + c) / s
 
 
 chunk_size = (BATCH_SIZE + 1) // flags.threads
@@ -198,7 +201,8 @@ for episode in range(start + 1, flags.num_episodes + 1):
                        agent_action_buffer,
                        done,
                        [[is_collision(a, i) for a in range(agent_count)] for i in range(BATCH_SIZE)],
-                       flags.step_reward)
+                       flags.step_reward,
+                       flags.collision_reward)
             agent_obs_buffer = agent_obs.clone()
             for idx, act in enumerate(action_dict):
                 for key, value in act.items():
@@ -225,7 +229,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
     current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
 
-    print(f'\rBatch {episode:>4} - Episode {BATCH_SIZE * episode:>6}'
+    print(f'\rBatch {episode:>4} - Episode {BATCH_SIZE * episode:>6} - Agents: {agent_count:>3}'
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'
@@ -233,8 +237,6 @@ for episode in range(start + 1, flags.num_episodes + 1):
           f' | Epsilon: {eps:.2f}'
           f' | Episode/s: {BATCH_SIZE * episode / (time.time() - start_time):.4f}s', end='')
 
-    if episode % flags.report_interval == 0:
-        print("")
-        if flags.train:
-            agent.save(project_root / 'checkpoints', episode, eps)
-        # Add stats to the tensorboard summary
+    print("")
+    if flags.train:
+        agent.save(project_root / 'checkpoints', episode, eps)
