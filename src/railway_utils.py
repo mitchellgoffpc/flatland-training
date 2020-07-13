@@ -3,6 +3,11 @@ import pickle
 
 from flatland.envs.rail_generators import sparse_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator
+import numpy as np
+try:
+    from .agent import BATCH_SIZE
+except:
+    from agent import BATCH_SIZE
 
 
 class Generator:
@@ -40,6 +45,44 @@ class Generator:
         return next(self)
 
 
+class RailGenerator:
+    def __init__(self, width=35, base=1.5):
+        self.rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=3, max_rails_between_cities=2,
+                                                    max_rails_in_city=3)
+        self.sub_idx = 0
+        self.top_idx = 0
+        self.width = width
+        self.base = base
+
+    def __next__(self):
+        self.sub_idx += 1
+        if self.sub_idx == BATCH_SIZE:
+            self.sub_idx = 0
+            self.top_idx += 1
+        return self.rail_generator(self.width, self.width, int(2 * self.base ** self.top_idx), np_random=np.random)
+
+    def __call__(self, *args, **kwargs):
+        return next(self)
+
+
+class ScheduleGenerator:
+    def __init__(self, base=1.5):
+        self.schedule_generator = sparse_schedule_generator({1.: 1.})
+        self.sub_idx = 0
+        self.top_idx = 0
+        self.base = base
+
+    def __next__(self, rail, hints):
+        if self.sub_idx == BATCH_SIZE:
+            self.sub_idx = 0
+            self.top_idx += 1
+        self.sub_idx += 1
+        return self.schedule_generator(rail, int(2 * self.base ** self.top_idx), hints, np_random=np.random)
+
+    def __call__(self, rail, _, hints, *args, **kwargs):
+        return self.__next__(rail, hints)
+
+
 # Helper function to load in precomputed railway networks
 def load_precomputed_railways(project_root, start_index, big=True):
     prefix = os.path.join(project_root, 'railroads')
@@ -56,14 +99,5 @@ def load_precomputed_railways(project_root, start_index, big=True):
 
 
 # Helper function to generate railways on the fly
-def create_random_railways(project_root, max_cities=5):
-    speed_ratio_map = {
-        1 / 1: 1.0,  # Fast passenger train
-        1 / 2.: 0.0,  # Fast freight train
-        1 / 3.: 0.0,  # Slow commuter train
-        1 / 4.: 0.0}  # Slow freight train
-
-    rail_generator = sparse_rail_generator(grid_mode=False, max_num_cities=max_cities,
-                                           max_rails_between_cities=2, max_rails_in_city=3)
-    schedule_generator = sparse_schedule_generator(speed_ratio_map)
-    return rail_generator, schedule_generator
+def create_random_railways(base=1.1):
+    return RailGenerator(base=base), ScheduleGenerator(base=base)
