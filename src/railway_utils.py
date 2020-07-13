@@ -2,14 +2,14 @@ import os
 import pickle
 
 import numpy as np
+
+from flatland.envs.rail_generators import sparse_rail_generator
 from flatland.envs.schedule_generators import sparse_schedule_generator
 
 try:
     from .agent import BATCH_SIZE
-    from .rail_generators import generator as rail_generator
 except:
     from agent import BATCH_SIZE
-    from rail_generators import generator as rail_generator
 
 
 class Generator:
@@ -49,6 +49,10 @@ class Generator:
 
 class RailGenerator:
     def __init__(self, width=35, base=1.5):
+        self.rail_generator = sparse_rail_generator(grid_mode=False,
+                                                    max_num_cities=max(2, width ** 2 // 300),
+                                                    max_rails_between_cities=2,
+                                                    max_rails_in_city=3)
         self.sub_idx = 0
         self.top_idx = 0
         self.width = width
@@ -59,7 +63,7 @@ class RailGenerator:
         if self.sub_idx == BATCH_SIZE:
             self.sub_idx = 0
             self.top_idx += 1
-        return rail_generator(self.width, int(2 * self.base ** self.top_idx))
+        return self.rail_generator(self.width, self.width, int(2 * self.base ** self.top_idx), np_random=np.random)
 
     def __call__(self, *args, **kwargs):
         return next(self)
@@ -92,7 +96,7 @@ def load_precomputed_railways(project_root, start_index, big=True):
         suffix = f'_3x30x30.pkl'
     sched = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
     rail = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
-    # if big:
+    #if big:
     #    sched, rail = rail, sched
     print(f"Working on {len(rail)} tracks")
     return rail, sched

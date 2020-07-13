@@ -17,11 +17,12 @@ BATCH_SIZE = 256
 GAMMA = 0.998
 TAU = 1e-3
 CLIP_FACTOR = 0.2
-LR = 2e-4
+LR = 4e-5
 UPDATE_EVERY = 1
 DOUBLE_DQN = False
+CUDA = False
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if CUDA and torch.cuda.is_available() else "cpu")
 
 
 

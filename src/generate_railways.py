@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
+
 try:
     from .railway_utils import create_random_railways
 except:
