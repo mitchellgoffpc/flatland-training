@@ -34,15 +34,12 @@ boolean = lambda x: str(x).lower() == 'true'
 parser.add_argument("--train", type=boolean, default=True, help="Whether to train the model or just evaluate it")
 parser.add_argument("--load-model", default=False, action='store_true',
                     help="Whether to load the model from the last checkpoint")
-parser.add_argument("--load-railways", type=boolean, default=False,
+parser.add_argument("--load-railways", type=boolean, default=True,
                     help="Whether to load in pre-generated railway networks")
 parser.add_argument("--report-interval", type=int, default=100, help="Iterations between reports")
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
 
 # Environment parameters
-parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
-parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
-parser.add_argument("--num-agents", type=int, default=5, help="Number of agents in each episode")
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--model-depth", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--hidden-factor", type=int, default=5, help="Depth of the observation tree")
@@ -53,7 +50,6 @@ parser.add_argument("--environment-width", type=int, default=35, help="Depth of 
 parser.add_argument("--agent-factor", type=float, default=1.1, help="Depth of the observation tree")
 
 # Training parameters
-parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
 parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of episodes to train for")
 parser.add_argument("--epsilon-decay", type=float, default=0, help="Decay factor for epsilon-greedy exploration")
 parser.add_argument("--step-reward", type=float, default=-1e-2, help="Depth of the observation tree")
@@ -90,7 +86,7 @@ else:
     rail_generator, schedule_generator = create_random_railways(flags.environment_width, flags.agent_factor)
 
 # Create the Flatland environment
-environments = [RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
+environments = [RailEnv(width=40, height=40, number_of_agents=1,
                         rail_generator=rail_generator,
                         schedule_generator=schedule_generator,
                         malfunction_generator_and_process_data=malfunction_from_params(
