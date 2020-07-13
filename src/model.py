@@ -86,97 +86,6 @@ class SeparableConvolution(torch.nn.Module):
         return self.str
 
 
-def try_norm(tensor, norm):
-    if norm is not None:
-        tensor = mish(norm(tensor))
-    return tensor
-
-
-def make_excite(conv, rank_norm, ranker, linear_norm, linear0, excite_norm, linear1):
-    @torch.jit.script
-    def excite(out):
-        batch = out.size(0)
-
-        exc = conv(out)
-
-        squeeze_heads = exc.size(1)
-
-        exc = torch.nn.functional.softmax(exc, 2)
-        exc = exc.unsqueeze(-1).transpose(1, -1)
-        exc = (out.unsqueeze(-1) * exc).sum(2)
-
-        # Rank experts (heads)
-        hds = exc.view(batch, squeeze_heads, -1)
-        exc = rank_norm(hds)
-        exc = ranker(mish(exc))
-        exc = exc.softmax(-1)
-        exc = exc.bmm(hds)
-        exc = exc.view(batch, -1, 1)
-
-        # Fully-connected block
-        nrm = linear_norm(exc).squeeze(-1)
-        nrm = linear0(nrm).unsqueeze(-1)
-        nrm = excite_norm(nrm)
-        act = mish(nrm.squeeze(-1))
-        exc = linear1(act).tanh()
-        exc = exc.unsqueeze(-1)
-        exc = exc.expand_as(out)
-
-        # Merge
-        out = out * exc
-        return out
-
-    return excite
-
-
-class Block(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, bias=False, cat=True, init_norm=False, out_norm=True,
-                 kernel_size=7, squeeze_heads=4):
-        super().__init__()
-        self.residual = hidden_size == output_size
-        self.cat = cat
-
-        self.init_norm = torch.nn.BatchNorm1d(hidden_size) if init_norm else None
-        self.linr = SeparableConvolution(hidden_size, output_size, kernel_size, padding=kernel_size // 2, bias=bias)
-        self.out_norm = torch.nn.BatchNorm1d(output_size) if out_norm else None
-
-        self.use_squeeze_attention = squeeze_heads > 0
-
-        if self.use_squeeze_attention:
-            self.squeeze_heads = squeeze_heads
-            self.exc_input_norm = torch.nn.BatchNorm1d(squeeze_heads)
-            self.expert_ranker = torch.nn.Linear(output_size, squeeze_heads, False)
-            self.excitation_conv = SeparableConvolution(output_size, squeeze_heads, kernel_size,
-                                                        padding=kernel_size // 2)
-            self.linear_in_norm = torch.nn.BatchNorm1d(output_size * squeeze_heads)
-            self.linear0 = torch.nn.Linear(output_size * squeeze_heads, output_size, False)
-            self.exc_norm = torch.nn.BatchNorm1d(output_size)
-            self.linear1 = torch.nn.Linear(output_size, output_size)
-            self.excite = make_excite(self.excitation_conv,
-                                      self.exc_input_norm,
-                                      self.expert_ranker,
-                                      self.linear_in_norm,
-                                      self.linear0,
-                                      self.exc_norm,
-                                      self.linear1)
-
-    def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
-        fn_input = try_norm(fn_input, self.init_norm)
-        out = self.linr(fn_input)
-        out = try_norm(out, self.out_norm)
-
-        if self.use_squeeze_attention:
-            out = self.excite(out)
-
-        if self.cat:
-            return torch.cat([out, fn_input], 1)
-
-        if self.residual:
-            return out + fn_input
-
-        return out
-
-
 class BasicBlock(torch.nn.Module):
     def __init__(self, in_features, out_features, stride, init_norm=False):
         super(BasicBlock, self).__init__()
@@ -219,6 +128,7 @@ class ConvNetwork(torch.nn.Module):
         out = self.linear1(mish(self.mid_norm(self.linear0(mish(self.init_norm(out))))))
         return out
 
+
 def init(module: torch.nn.Module):
     if hasattr(module, "weight") and hasattr(module.weight, "data"):
         if "norm" in module.__class__.__name__.lower() or (
@@ -228,76 +138,29 @@ def init(module: torch.nn.Module):
             torch.nn.init.orthogonal_(module.weight.data)
     if hasattr(module, "bias") and hasattr(module.bias, "data"):
         torch.nn.init.constant_(module.bias.data, 0)
-# class QNetwork(torch.nn.Module):
-#     def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
-#                  debug=True):
-#         """
-#         11 input features, state_size//11 = item_count
-#         :param state_size:
-#         :param action_size:
-#         :param hidden_factor:
-#         :param depth:
-#         :return:
-#         """
-#         super(QNetwork, self).__init__()
-#         observations = state_size // 11
-#         if debug:
-#             print(f"[DEBUG/MODEL] Using {observations} observations as input")
-#
-#         out_features = hidden_factor * 11
-#
-#         net = torch.nn.ModuleList([torch.nn.Conv1d(state_size, out_features, 1),
-#                                    *[Block(out_features + out_features * i * cat,
-#                                            out_features,
-#                                            cat=cat,
-#                                            init_norm=not i,
-#                                            kernel_size=kernel_size,
-#                                            squeeze_heads=squeeze_heads)
-#                                      for i in range(depth)],
-#                                    Block(out_features + out_features * depth * cat, action_size,
-#                                          bias=True,
-#                                          cat=False,
-#                                          out_norm=False,
-#                                          init_norm=False,
-#                                          kernel_size=kernel_size,
-#                                          squeeze_heads=squeeze_heads)])
-#
-#
-#         net.apply(init)
-#
-#         if debug:
-#             parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, net.parameters()))
-#             digits = int(math.log10(parameters))
-#             number_string = " kMGTPEZY"[digits // 3]
-#
-#             print(
-#                 f"[DEBUG/MODEL] Training with {parameters * 10 ** -(digits // 3 * 3):.1f}{number_string} parameters")
-#
-#         self.net = net
-#
-#     def forward(self, fn_input: torch.Tensor) -> typing.Tuple[torch.Tensor, torch.Tensor]:
-#         out = fn_input
-#         for module in self.net:
-#             out = module(out)
-#         return out
 
 class Residual(torch.nn.Module):
     def __init__(self, features):
         super(Residual, self).__init__()
         self.norm = torch.nn.BatchNorm1d(features)
-        self.conv = WeightDropConv(features, features)
+        self.conv = WeightDropConv(features, 2 * features)
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
-        return self.conv(mish(self.norm(fn_input))) + fn_input
+        out, exc = self.conv(mish(self.norm(fn_input))).chunk(2, 1)
+        exc = exc.mean(dim=1, keepdim=True).tanh()
+        fn_input = fn_input * exc
+        out = -out * exc
+        return fn_input + out
 
 
-def QNetwork(state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
+def QNetwork(state_size, action_size, hidden_factor=16, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
              debug=True):
-    model = torch.nn.Sequential(torch.nn.Conv1d(2 * state_size, 55, 1, groups=11, bias=False),
-                                Residual(55),
-                                torch.nn.BatchNorm1d(55),
+    model = torch.nn.Sequential(torch.nn.Conv1d(2 * state_size, 11 * hidden_factor, 1, groups=11, bias=False),
+                                Residual(11 * hidden_factor),
+                                torch.nn.BatchNorm1d(11 * hidden_factor),
                                 Mish(),
-                                WeightDropConv(55, action_size, 1))
+                                WeightDropConv(11 * hidden_factor, action_size, 1))
+    print(model)
     if debug:
         parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, model.parameters()))
         digits = int(math.log10(parameters))

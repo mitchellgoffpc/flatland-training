@@ -40,9 +40,9 @@ parser.add_argument("--report-interval", type=int, default=100, help="Iterations
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
 
 # Environment parameters
-parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
+parser.add_argument("--tree-depth", type=int, default=3, help="Depth of the observation tree")
 parser.add_argument("--model-depth", type=int, default=1, help="Depth of the observation tree")
-parser.add_argument("--hidden-factor", type=int, default=5, help="Depth of the observation tree")
+parser.add_argument("--hidden-factor", type=int, default=16, help="Depth of the observation tree")
 parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the observation tree")
 
