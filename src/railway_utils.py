@@ -99,5 +99,5 @@ def load_precomputed_railways(project_root, start_index, big=True):
 
 
 # Helper function to generate railways on the fly
-def create_random_railways(base=1.1):
-    return RailGenerator(base=base), ScheduleGenerator(base=base)
+def create_random_railways(width, base=1.1):
+    return RailGenerator(width=width, base=base), ScheduleGenerator(base=base)

@@ -49,6 +49,9 @@ parser.add_argument("--hidden-factor", type=int, default=5, help="Depth of the o
 parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the observation tree")
 
+parser.add_argument("--environment-width", type=int, default=35, help="Depth of the observation tree")
+parser.add_argument("--agent-factor", type=float, default=1.1, help="Depth of the observation tree")
+
 # Training parameters
 parser.add_argument("--agent-type", default="dqn", choices=["dqn", "ppo"], help="Which type of RL agent to use")
 parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of episodes to train for")
@@ -84,7 +87,7 @@ else:
 if flags.load_railways:
     rail_generator, schedule_generator = load_precomputed_railways(project_root, start)
 else:
-    rail_generator, schedule_generator = create_random_railways(1.1)
+    rail_generator, schedule_generator = create_random_railways(flags.environment_width, flags.agent_factor)
 
 # Create the Flatland environment
 environments = [RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
