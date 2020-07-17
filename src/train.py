@@ -17,13 +17,13 @@ try:
     from .rail_env import RailEnv
     from .agent import Agent as DQN_Agent, device, BATCH_SIZE
     from .normalize_output_data import wrap
-    from .observation_utils import normalize_observation, TreeObservation
+    from .observation_utils import normalize_observation, TreeObservation, GlobalObsForRailEnv, LocalObsForRailEnv
     from .railway_utils import load_precomputed_railways, create_random_railways
 except:
     from rail_env import RailEnv
     from agent import Agent as DQN_Agent, device, BATCH_SIZE
     from normalize_output_data import wrap
-    from observation_utils import normalize_observation, TreeObservation
+    from observation_utils import normalize_observation, TreeObservation, GlobalObsForRailEnv, LocalObsForRailEnv
     from railway_utils import load_precomputed_railways, create_random_railways
 
 project_root = Path(__file__).resolve().parent.parent
@@ -41,7 +41,7 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 
 # Environment parameters
 parser.add_argument("--tree-depth", type=int, default=3, help="Depth of the observation tree")
-parser.add_argument("--model-depth", type=int, default=1, help="Depth of the observation tree")
+parser.add_argument("--model-depth", type=int, default=3, help="Depth of the observation tree")
 parser.add_argument("--hidden-factor", type=int, default=16, help="Depth of the observation tree")
 parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the observation tree")
@@ -54,10 +54,14 @@ parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of
 parser.add_argument("--epsilon-decay", type=float, default=0, help="Decay factor for epsilon-greedy exploration")
 parser.add_argument("--step-reward", type=float, default=-1e-2, help="Depth of the observation tree")
 parser.add_argument("--collision-reward", type=float, default=-2, help="Depth of the observation tree")
-parser.add_argument("--global-environment", type=boolean, default=False, help="Depth of the observation tree")
+parser.add_argument("--global-environment", type=boolean, default=True, help="Depth of the observation tree")
+parser.add_argument("--local-environment", type=boolean, default=True, help="Depth of the observation tree")
 parser.add_argument("--threads", type=int, default=1, help="Depth of the observation tree")
 
 flags = parser.parse_args()
+
+if flags.local_environment:
+    flags.global_environment = True
 
 # Seeded RNG so we can replicate our results
 
@@ -91,7 +95,9 @@ environments = [RailEnv(width=40, height=40, number_of_agents=1,
                         schedule_generator=schedule_generator,
                         malfunction_generator_and_process_data=malfunction_from_params(
                             MalfunctionParameters(1 / 500, 20, 50)),
-                        obs_builder_object=(GlobalObsForRailEnv()
+                        obs_builder_object=((LocalObsForRailEnv(4)
+                                             if flags.local_environment
+                                             else GlobalObsForRailEnv)
                                             if flags.global_environment
                                             else TreeObservation(max_depth=flags.tree_depth)),
                         random_seed=i)
@@ -112,19 +118,27 @@ if not flags.train:
 # Helper function to detect collisions
 ACTIONS = {0: 'B', 1: 'L', 2: 'F', 3: 'R', 4: 'S'}
 
+if flags.global_environment:
+    def is_collision(a, i):
+        own_agent = environments[i].agents[a]
+        return any(own_agent.position == agent.position
+                   for agent_id, agent in enumerate(environments[i].agents)
+                   if agent_id != a)
+else:
+    def is_collision(a, i):
+        if obs[i][a] is None: return False
+        is_junction = not isinstance(obs[i][a].childs['L'], float) or not isinstance(obs[i][a].childs['R'], float)
 
-def is_collision(a, i):
-    if obs[i][a] is None: return False
-    is_junction = not isinstance(obs[i][a].childs['L'], float) or not isinstance(obs[i][a].childs['R'], float)
-
-    if not is_junction or environments[i].agents[a].speed_data['position_fraction'] > 0:
-        action = ACTIONS[environments[i].agents[a].speed_data['transition_action_on_cellexit']] if is_junction else 'F'
-        return obs[i][a].childs[action] != negative_infinity and obs[i][a].childs[action] != positive_infinity \
-               and obs[i][a].childs[action].num_agents_opposite_direction > 0 \
-               and obs[i][a].childs[action].dist_other_agent_encountered <= 1 \
-               and obs[i][a].childs[action].dist_other_agent_encountered < obs[i][a].childs[action].dist_unusable_switch
-    else:
-        return False
+        if not is_junction or environments[i].agents[a].speed_data['position_fraction'] > 0:
+            action = ACTIONS[
+                environments[i].agents[a].speed_data['transition_action_on_cellexit']] if is_junction else 'F'
+            return obs[i][a].childs[action] != negative_infinity and obs[i][a].childs[action] != positive_infinity \
+                   and obs[i][a].childs[action].num_agents_opposite_direction > 0 \
+                   and obs[i][a].childs[action].dist_other_agent_encountered <= 1 \
+                   and obs[i][a].childs[action].dist_other_agent_encountered < obs[i][a].childs[
+                       action].dist_unusable_switch
+        else:
+            return False
 
 
 def get_means(x, y, c, s):
@@ -159,8 +173,12 @@ for episode in range(start + 1, flags.num_episodes + 1):
 
     score, steps_taken, collision = 0, 0, False
     agent_count = len(obs[0])
-    agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
-    normalize(obs, agent_obs)
+    if flags.global_environment:
+        agent_obs = torch.as_tensor([list(o.values()) for o in obs]).float().to(device)
+    else:
+        agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
+        normalize(obs, agent_obs)
+
     agent_obs_buffer = agent_obs.clone()
     agent_action_buffer = [[2] * agent_count for _ in range(BATCH_SIZE)]
 
@@ -169,7 +187,11 @@ for episode in range(start + 1, flags.num_episodes + 1):
     for step in range(max_steps):
         update_values = [[False] * agent_count for _ in range(BATCH_SIZE)]
         action_dict = [{} for _ in range(BATCH_SIZE)]
-        input_tensor = torch.cat([agent_obs_buffer.flatten(1, 2), agent_obs.flatten(1, 2)], 1)
+        if flags.global_environment:
+            input_tensor = torch.cat([agent_obs_buffer, agent_obs], -1)
+            input_tensor.transpose_(1, -1)
+        else:
+            input_tensor = torch.cat([agent_obs_buffer.flatten(1, 2), agent_obs.flatten(1, 2)], 1)
         if any(any(inf['action_required']) for inf in info):
             ret_action = agent.multi_act(input_tensor, eps=eps)
         else:
@@ -210,7 +232,10 @@ for episode in range(start + 1, flags.num_episodes + 1):
         if all_done:
             break
 
-        normalize(obs, agent_obs)
+        if flags.global_environment:
+            agent_obs = torch.as_tensor([list(o.values()) for o in obs]).float().to(device)
+        else:
+            normalize(obs, agent_obs)
 
         # Render
         # if flags.render_interval and episode % flags.render_interval == 0:
@@ -229,7 +254,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
 
     print(f'\rBatch {episode:>4} - Episode {BATCH_SIZE * episode:>6} - Agents: {agent_count:>3}'
-          f' | Score: {current_score:.4f}, {mean_score:.4f}'
+          f' | Score: {current_score:.4f}, {mean_score:.4f}' 
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'
           f' | Collisions: {100 * current_collisions:5.2f}%, {100 * mean_collisions:5.2f}%'

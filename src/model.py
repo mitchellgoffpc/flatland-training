@@ -8,7 +8,9 @@ import torch
 @torch.jit.script
 def mish(fn_input: torch.Tensor) -> torch.Tensor:
     return fn_input * torch.tanh(torch.nn.functional.softplus(fn_input))
-
+@torch.jit.script
+def nothing(x):
+    return x
 
 class Mish(torch.nn.Module):
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
@@ -23,7 +25,8 @@ class WeightDropConv(torch.nn.Module):
         weight_dropout (float): The probability a weight will be dropped.
     """
 
-    def __init__(self, in_features: int, out_features: int, kernel_size=1, bias=True, weight_dropout=0.1, groups=1,
+    def __init__(self, in_features: int, out_features: int, kernel_size: typing.Union[int, tuple] = 1, bias=True,
+                 weight_dropout=0.1, groups=1,
                  padding=0, dilation=1, function=torch.nn.functional.conv1d, stride=1):
         super().__init__()
         self.weight_dropout = weight_dropout
@@ -31,7 +34,10 @@ class WeightDropConv(torch.nn.Module):
             print(f"[ERROR] Unable to get weight for in={in_features},groups={groups}. Make sure they are divisible.")
         if out_features % groups != 0:
             print(f"[ERROR] Unable to get weight for out={out_features},groups={groups}. Make sure they are divisible.")
-        self.weight = torch.nn.Parameter(torch.Tensor(out_features, in_features // groups, kernel_size))
+        if isinstance(kernel_size, int):
+            self.weight = torch.nn.Parameter(torch.Tensor(out_features, in_features // groups, kernel_size))
+        else:
+            self.weight = torch.nn.Parameter(torch.Tensor(out_features, in_features // groups, *kernel_size))
         if bias:
             self.bias = torch.nn.Parameter(torch.Tensor(out_features))
         else:
@@ -43,8 +49,11 @@ class WeightDropConv(torch.nn.Module):
         self._function = function
 
     def forward(self, fn_input):
+        drop = torch.nn.functional.dropout(self.weight, self.weight_dropout, self.training)
+        if drop.dtype != self.weight.dtype:
+            drop = drop.to(self.weight.dtype)
         return self._function(fn_input,
-                              torch.nn.functional.dropout(self.weight, self.weight_dropout, self.training),
+                              drop,
                               bias=self.bias,
                               padding=self.padding,
                               dilation=self.dilation,
@@ -57,9 +66,11 @@ class SeparableConvolution(torch.nn.Module):
                  padding: typing.Union[int, tuple] = 0, dilation: typing.Union[int, tuple] = 1,
                  bias=False, dim=1, stride=1):
         super(SeparableConvolution, self).__init__()
-        self.depthwise = kernel_size > 1
+        self.depthwise = kernel_size > 1 if isinstance(kernel_size, int) else all(k>1 for k in kernel_size)
         function = getattr(torch.nn.functional, f'conv{dim}d')
         norm = getattr(torch.nn, f'BatchNorm{dim}d')
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size,) * dim
         if self.depthwise:
             self.depthwise_conv = WeightDropConv(in_features, in_features,
                                                  kernel_size,
@@ -70,7 +81,10 @@ class SeparableConvolution(torch.nn.Module):
                                                  function=function,
                                                  stride=stride)
             self.mid_norm = norm(in_features)
-        self.pointwise_conv = WeightDropConv(in_features, out_features, 1, bias=bias, function=function)
+        else:
+            self.depthwise_conv = nothing
+            self.mid_norm = nothing
+        self.pointwise_conv = WeightDropConv(in_features, out_features, (1,)*dim , bias=bias, function=function)
         self.str = (f'SeparableConvolution({in_features}, {out_features}, {kernel_size}, '
                     + f'dilation={dilation}, padding={padding})')
 
@@ -89,13 +103,15 @@ class SeparableConvolution(torch.nn.Module):
 class BasicBlock(torch.nn.Module):
     def __init__(self, in_features, out_features, stride, init_norm=False):
         super(BasicBlock, self).__init__()
-        self.init_norm = torch.nn.BatchNorm2d(out_features) if init_norm else None
-        self.init_conv = SeparableConvolution(in_features, out_features, 3, 1, stride=stride, dim=2)
-        self.mid_norm = torch.nn.BatchNorm2d(out_features)
-        self.end_conv = SeparableConvolution(in_features, out_features, 3, 1, dim=2)
+        self.init_norm = torch.nn.BatchNorm3d(in_features) if init_norm else None
+        self.init_conv = SeparableConvolution(in_features, out_features, (3, 3, 1), (1, 1, 0),
+                                              stride=(stride, stride, 1), dim=3)
+        self.mid_norm = torch.nn.BatchNorm3d(out_features)
+        self.end_conv = SeparableConvolution(out_features, out_features, (3, 3, 1), (1, 1, 0), dim=3)
         self.shortcut = (None
                          if stride == 1 and in_features == out_features
-                         else SeparableConvolution(in_features, out_features, 3, 1, stride=stride, dim=2))
+                         else SeparableConvolution(in_features, out_features, (3, 3, 1), (1, 1, 0),
+                                                   stride=(stride, stride, 1), dim=3))
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         out = self.init_conv(fn_input if self.init_norm is None else mish(self.init_norm(fn_input)))
@@ -108,17 +124,18 @@ class BasicBlock(torch.nn.Module):
 
 
 class ConvNetwork(torch.nn.Module):
-    def __init__(self, state_size, action_size, hidden_factor=15, depth=4, kernel_size=7, squeeze_heads=4, cat=True,
+    def __init__(self, state_size, action_size, hidden_size=15, depth=8, kernel_size=7, squeeze_heads=4, cat=True,
                  debug=True):
         super(ConvNetwork, self).__init__()
-        hidden_size = 11 * hidden_factor
-        self.net = torch.nn.ModuleList([BasicBlock(state_size, hidden_size, 1),
-                                        *[BasicBlock(hidden_size, hidden_size, 2 - i % 2, True)
-                                          for i in range(depth)]])
+        _ = state_size
+        state_size = 2*21
+        self.net = torch.nn.ModuleList([BasicBlock(state_size if not i else hidden_size, hidden_size, 2, True)
+                                          for i in range(depth)])
         self.init_norm = torch.nn.BatchNorm1d(hidden_size)
-        self.linear0 = torch.nn.Linear(hidden_size, hidden_size, bias=False)
+        self.linear0 = torch.nn.Conv1d(hidden_size, hidden_size, 1, bias=False)
         self.mid_norm = torch.nn.BatchNorm1d(hidden_size)
-        self.linear1 = torch.nn.Linear(hidden_size, action_size)
+        self.linear1 = torch.nn.Conv1d(hidden_size, action_size, 1)
+        print(self)
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         out = fn_input
@@ -138,6 +155,7 @@ def init(module: torch.nn.Module):
             torch.nn.init.orthogonal_(module.weight.data)
     if hasattr(module, "bias") and hasattr(module.bias, "data"):
         torch.nn.init.constant_(module.bias.data, 0)
+
 
 class Residual(torch.nn.Module):
     def __init__(self, features):

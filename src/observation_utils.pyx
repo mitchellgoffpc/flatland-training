@@ -1,5 +1,6 @@
 from collections import defaultdict
-
+cimport numpy as cnp
+import numpy as np
 import torch
 from flatland.core.env_observation_builder import ObservationBuilder
 from flatland.core.grid.grid4_utils import get_new_position
@@ -43,6 +44,140 @@ cdef class RailNode:
 
     def __repr__(self):
         return f'RailNode({self.position}, {len(self.edges)})'
+
+
+class GlobalObsForRailEnv(ObservationBuilder):
+    """
+    Gives a global observation of the entire rail environment.
+    The observation is composed of the following elements:
+
+        - transition map array with dimensions (env.height, env.width, 16),\
+          assuming 16 bits encoding of transitions.
+
+        - obs_agents_state: A 3D array (map_height, map_width, 5) with
+            - first channel containing the agents position and direction
+            - second channel containing the other agents positions and direction
+            - third channel containing agent/other agent malfunctions
+            - fourth channel containing agent/other agent fractional speeds
+            - fifth channel containing number of other agents ready to depart
+
+        - obs_targets: Two 2D arrays (map_height, map_width, 2) containing respectively the position of the given agent\
+         target and the positions of the other agents targets (flag only, no counter!).
+    """
+    def __init__(self):
+        super(GlobalObsForRailEnv, self).__init__()
+        self.size = 0
+        self._custom_rail_obs = None
+    def reset(self):
+        if self._custom_rail_obs is None:
+            self._custom_rail_obs = np.zeros((1, self.env.height + 2*self.size, self.env.width + 2*self.size, 16))
+
+        self._custom_rail_obs[0, self.size:-self.size, self.size:-self.size] = np.array([[[[1 if digit == '1' else 0
+                                                                                    for digit in
+                                                                                    f'{self.env.rail.get_full_transitions(i, j):016b}']
+                                                                                   for j in range(self.env.width)]
+                                                                                  for i in range(self.env.height)]],
+                                                                                dtype=np.float32)
+
+    def get_many(self, list trash):
+        cdef int agent_count = len(self.env.agents)
+        cdef cnp.ndarray obs_agents_state = np.zeros((agent_count,
+                                                     self.env.height,
+                                                     self.env.width,
+                                                     5), dtype=np.float32)
+        cdef int i, agent_id
+        cdef tuple pos, agent_virtual_position
+        for agent_id, agent in enumerate(self.env.agents):
+            if agent.status == RailAgentStatus.READY_TO_DEPART:
+                agent_virtual_position = agent.initial_position
+            elif agent.status == RailAgentStatus.ACTIVE:
+                agent_virtual_position = agent.position
+            elif agent.status == RailAgentStatus.DONE:
+                agent_virtual_position = agent.target
+            else:
+                continue
+
+            obs_agents_state[agent_id, :, :, 0:4] = -1
+
+            obs_agents_state[(agent_id,) + agent_virtual_position + (0,)] = agent.direction
+
+            for i, other_agent in enumerate(self.env.agents):
+
+                # ignore other agents not in the grid any more
+                if other_agent.status == RailAgentStatus.DONE_REMOVED:
+                    continue
+
+                # second to fourth channel only if in the grid
+                if other_agent.position is not None:
+                    pos = (agent_id,) + other_agent.position
+                    # second channel only for other agents
+                    if i != agent_id:
+                        obs_agents_state[pos + (1,)] = other_agent.direction
+                    obs_agents_state[pos + (2,)] = other_agent.malfunction_data['malfunction']
+                    obs_agents_state[pos + (3,)] = other_agent.speed_data['speed']
+                # fifth channel: all ready to depart on this position
+                if other_agent.status == RailAgentStatus.READY_TO_DEPART:
+                    obs_agents_state[(agent_id,) + other_agent.initial_position + (4,)] += 1
+        return {i: arr
+                for i, arr in
+                enumerate(np.concatenate([np.repeat(self.rail_obs, agent_count, 0), obs_agents_state], -1))}
+
+
+class LocalObsForRailEnv(GlobalObsForRailEnv):
+    def __init__(self, size=7):
+        super(LocalObsForRailEnv, self).__init__()
+        self.size = size
+    def get_many(self, list trash):
+        cdef int agent_count = len(self.env.agents)
+        obs_agents_state = np.zeros((agent_count,
+                                                     self.size * 2 + 1,
+                                                     self.size * 2 + 1,
+                                                     21), dtype=np.float32)
+        cdef int i, agent_id
+        cdef tuple agent_virtual_position
+        for agent_id, agent in enumerate(self.env.agents):
+            if agent.status == RailAgentStatus.READY_TO_DEPART:
+                agent_virtual_position = agent.initial_position
+            elif agent.status == RailAgentStatus.ACTIVE:
+                agent_virtual_position = agent.position
+            elif agent.status == RailAgentStatus.DONE:
+                agent_virtual_position = agent.target
+            else:
+                continue
+            x0, y0, x1, y1 = (agent_virtual_position[0],
+                              agent_virtual_position[1],
+                              agent_virtual_position[0] + 2*self.size + 1,
+                              agent_virtual_position[1] + 2*self.size + 1)
+            obs_agents_state[agent_id, :, :, 5:] = self._custom_rail_obs[0, x0:x1, y0:y1]
+
+            obs_agents_state[agent_id, :, :, 0:4] = -1
+
+            obs_agents_state[agent_id, :, :, 0] = agent.direction
+
+            for i, other_agent in enumerate(self.env.agents):
+
+                # ignore other agents not in the grid any more
+                if other_agent.status == RailAgentStatus.DONE_REMOVED:
+                    continue
+
+                # second to fourth channel only if in the grid
+                if other_agent.position is not None:
+                    pos = (agent_id,) + other_agent.position
+                    # second channel only for other agents
+                    if i != agent_id:
+                        obs_agents_state[agent_id, :, :, 1] = other_agent.direction
+                    obs_agents_state[agent_id, :, :, 2] = other_agent.malfunction_data['malfunction']
+                    obs_agents_state[agent_id, :, :, 3] = other_agent.speed_data['speed']
+                # fifth channel: all ready to depart on this position
+                if other_agent.status == RailAgentStatus.READY_TO_DEPART:
+                    init_pos = other_agent.initial_position
+                    dist0 = agent_virtual_position[0] - init_pos[0]
+                    dist1 = agent_virtual_position[1] - init_pos[1]
+                    if abs(dist0) < self.size and abs(dist1) < self.size:
+                        obs_agents_state[agent_id, dist0 + self.size, dist1 + self.size, 4] += 1
+        return {i: arr
+                for i, arr in
+                enumerate(obs_agents_state)}
 
 
 class TreeObservation(ObservationBuilder):

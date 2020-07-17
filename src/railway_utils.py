@@ -88,12 +88,12 @@ class ScheduleGenerator:
 
 
 # Helper function to load in precomputed railway networks
-def load_precomputed_railways(project_root, start_index, big=True):
+def load_precomputed_railways(project_root, start_index, big=False):
     prefix = os.path.join(project_root, 'railroads')
     if big:
-        suffix = f'_45x90x90.pkl'
+        suffix = f'_110.pkl'
     else:
-        suffix = f'_3x30x30.pkl'
+        suffix = f'_50.pkl'
     sched = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
     rail = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
     #if big:

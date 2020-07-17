@@ -13,7 +13,7 @@ except:
 import os
 
 BUFFER_SIZE = 500_000
-BATCH_SIZE = 256
+BATCH_SIZE = 32
 GAMMA = 0.998
 TAU = 1e-3
 CLIP_FACTOR = 0.2
@@ -50,6 +50,13 @@ class Agent:
                                   kernel_size,
                                   squeeze_heads,
                                   debug=False).to(device)
+        try:
+            self.policy = torch.jit.script(self.policy)
+            self.old_policy = torch.jit.script(self.old_policy)
+        except:
+            import traceback
+            traceback.print_exc()
+            print("NO JIT")
         self.old_policy.load_state_dict(self.policy.state_dict())
         self.optimizer = Optimizer(self.policy.parameters(), lr=LR, weight_decay=1e-2)
 
