@@ -103,7 +103,7 @@ environments = [RailEnv(width=40, height=40, number_of_agents=1,
                         random_seed=i)
                 for i in range(BATCH_SIZE)]
 env = environments[0]
-
+torch.autograd.set_detect_anomaly(True)
 # After training we want to render the results so we also load a renderer
 
 # Add some variables to keep track of the progress
@@ -174,7 +174,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
     score, steps_taken, collision = 0, 0, False
     agent_count = len(obs[0])
     if flags.global_environment:
-        agent_obs = torch.as_tensor([list(o.values()) for o in obs]).float().to(device)
+        agent_obs = torch.as_tensor([list(o.values()) for o in obs]).long().to(device)
     else:
         agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
         normalize(obs, agent_obs)
@@ -233,7 +233,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
             break
 
         if flags.global_environment:
-            agent_obs = torch.as_tensor([list(o.values()) for o in obs]).float().to(device)
+            agent_obs = torch.as_tensor([list(o.values()) for o in obs]).long().to(device)
         else:
             normalize(obs, agent_obs)
 

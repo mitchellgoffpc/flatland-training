@@ -48,13 +48,16 @@ class Agent:
                                   kernel_size,
                                   squeeze_heads,
                                   debug=False).to(device)
-        try:
-            self.policy = torch.jit.script(self.policy)
-            self.old_policy = torch.jit.script(self.old_policy)
-        except:
-            import traceback
-            traceback.print_exc()
+        if CUDA:
             print("NO JIT")
+        else:
+            try:
+                self.policy = torch.jit.script(self.policy)
+                self.old_policy = torch.jit.script(self.old_policy)
+            except:
+                import traceback
+                traceback.print_exc()
+                print("NO JIT")
         self.old_policy.load_state_dict(self.policy.state_dict())
         self.optimizer = Optimizer(self.policy.parameters(), lr=LR, weight_decay=1e-2)
 
@@ -117,16 +120,14 @@ class Agent:
     def learn(self, states, actions, rewards):
         self.policy.train()
         actions.unsqueeze_(1)
-        responsible_outputs = self.policy(states).gather(1, actions)
-        old_responsible_outputs = self.old_policy(states).gather(1, actions)
+        responsible_outputs = self.policy(states, True).gather(1, actions)
+        old_responsible_outputs = self.old_policy(states, True).gather(1, actions)
         old_responsible_outputs.detach_()
         ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
+        ratio.squeeze_(1)
         clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
-        loss = -torch.min(ratio * rewards, clamped_ratio * rewards).mean()
+        loss = -torch.min(ratio * rewards, clamped_ratio * rewards).sum(-1).mean()
 
-        # rewards = rewards - rewards.mean()
-
-        # Compute loss and perform a gradient step
         self.old_policy.load_state_dict(self.policy.state_dict())
         self.optimizer.zero_grad()
         loss.backward()

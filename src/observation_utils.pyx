@@ -1,4 +1,5 @@
 from collections import defaultdict
+
 cimport numpy as cnp
 import numpy as np
 import torch
@@ -70,21 +71,23 @@ class GlobalObsForRailEnv(ObservationBuilder):
         self._custom_rail_obs = None
     def reset(self):
         if self._custom_rail_obs is None:
-            self._custom_rail_obs = np.zeros((1, self.env.height + 2*self.size, self.env.width + 2*self.size, 16))
+            self._custom_rail_obs = np.zeros((1, self.env.height + 2 * self.size, self.env.width + 2 * self.size, 16))
 
         self._custom_rail_obs[0, self.size:-self.size, self.size:-self.size] = np.array([[[[1 if digit == '1' else 0
-                                                                                    for digit in
-                                                                                    f'{self.env.rail.get_full_transitions(i, j):016b}']
-                                                                                   for j in range(self.env.width)]
-                                                                                  for i in range(self.env.height)]],
-                                                                                dtype=np.float32)
+                                                                                            for digit in
+                                                                                            f'{self.env.rail.get_full_transitions(i, j):016b}']
+                                                                                           for j in
+                                                                                           range(self.env.width)]
+                                                                                          for i in
+                                                                                          range(self.env.height)]],
+                                                                                        dtype=np.int64)
 
     def get_many(self, list trash):
         cdef int agent_count = len(self.env.agents)
         cdef cnp.ndarray obs_agents_state = np.zeros((agent_count,
-                                                     self.env.height,
-                                                     self.env.width,
-                                                     5), dtype=np.float32)
+                                                      self.env.height,
+                                                      self.env.width,
+                                                      5), dtype=np.int64)
         cdef int i, agent_id
         cdef tuple pos, agent_virtual_position
         for agent_id, agent in enumerate(self.env.agents):
@@ -130,9 +133,9 @@ class LocalObsForRailEnv(GlobalObsForRailEnv):
     def get_many(self, list trash):
         cdef int agent_count = len(self.env.agents)
         obs_agents_state = np.zeros((agent_count,
-                                                     self.size * 2 + 1,
-                                                     self.size * 2 + 1,
-                                                     21), dtype=np.float32)
+                                     self.size * 2 + 1,
+                                     self.size * 2 + 1,
+                                     21), dtype=np.int64)
         cdef int i, agent_id
         cdef tuple agent_virtual_position
         for agent_id, agent in enumerate(self.env.agents):
@@ -146,8 +149,8 @@ class LocalObsForRailEnv(GlobalObsForRailEnv):
                 continue
             x0, y0, x1, y1 = (agent_virtual_position[0],
                               agent_virtual_position[1],
-                              agent_virtual_position[0] + 2*self.size + 1,
-                              agent_virtual_position[1] + 2*self.size + 1)
+                              agent_virtual_position[0] + 2 * self.size + 1,
+                              agent_virtual_position[1] + 2 * self.size + 1)
             obs_agents_state[agent_id, :, :, 5:] = self._custom_rail_obs[0, x0:x1, y0:y1]
 
             obs_agents_state[agent_id, :, :, 0:4] = -1

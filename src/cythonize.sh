@@ -11,4 +11,3 @@ function compile {
 
 compile observation_utils
 compile rail_env
-compile rail_generators
