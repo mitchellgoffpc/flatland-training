@@ -41,10 +41,6 @@ def do(schedules: list, rail_networks: list):
     return
 
 
-manager = multiprocessing.Manager()
-shared_schedules = manager.list(schedules)
-shared_rail_networks = manager.list(rail_networks)
-# Generate 10000 random railways in 100 batches of 100
 for _ in tqdm(range(500), ncols=150, leave=False):
     do(schedules, rail_networks)
     with open(project_root / f'railroads/rail_networks_{width}.pkl', 'wb') as file:
@@ -52,5 +48,5 @@ for _ in tqdm(range(500), ncols=150, leave=False):
     with open(project_root / f'railroads/schedules_{width}.pkl', 'wb') as file:
         pickle.dump(rail_networks, file, protocol=4)
 
-print(f"Saved {len(shared_rail_networks)} railways")
+print(f"Saved {len(rail_networks)} railways")
 print("Done")

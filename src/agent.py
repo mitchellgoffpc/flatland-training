@@ -6,10 +6,8 @@ from torch_optimizer import Yogi as Optimizer
 
 try:
     from .model import QNetwork, ConvNetwork
-    from .replay_memory import ReplayBuffer
 except:
     from model import QNetwork, ConvNetwork
-    from replay_memory import ReplayBuffer
 import os
 
 BUFFER_SIZE = 500_000
@@ -61,7 +59,6 @@ class Agent:
         self.optimizer = Optimizer(self.policy.parameters(), lr=LR, weight_decay=1e-2)
 
         # Replay memory
-        self.memory = ReplayBuffer(BATCH_SIZE)
         self.stack = [[] for _ in range(4)]
         self.t_step = 0
 
