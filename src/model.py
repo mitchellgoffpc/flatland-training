@@ -72,7 +72,7 @@ class BasicBlock(torch.nn.Module):
         self.end_conv = SeparableConvolution(out_features, out_features, (3, 3, 1), (1, 1, 0), dim=3)
         self.shortcut = (nothing
                          if stride == 1 and in_features == out_features
-                         else SeparableConvolution(in_features, out_features, (3, 3, 1), (1, 1, 0),
+                         else SeparableConvolution(in_features, out_features, (1, 1, 1), (0, 0, 0),
                                                    stride=(stride, stride, 1), dim=3))
         self.message_box = int(out_features ** 0.5) if message_box is None else message_box
 

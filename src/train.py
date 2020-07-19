@@ -5,7 +5,6 @@ from pathlib import Path
 
 import torch
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
-from flatland.envs.observations import GlobalObsForRailEnv
 from pathos import multiprocessing
 
 torch.jit.optimized_execution(True)
@@ -73,7 +72,7 @@ agent = DQN_Agent(state_size,
                   flags.squeeze_heads,
                   flags.global_environment)
 if flags.load_model:
-    start,_ = agent.load(project_root / 'checkpoints', 0, 1.0)
+    start, _ = agent.load(project_root / 'checkpoints', 0, 1.0)
 else:
     start = 0
 # We need to either load in some pre-generated railways from disk, or else create a random railway generator.
@@ -172,7 +171,8 @@ while True:
     agent_action_buffer = [[2] * agent_count for _ in range(BATCH_SIZE)]
 
     # Run an episode
-    max_steps = 8 * env.width + env.height
+    city_count = (env.width * env.height)//300
+    max_steps = int(8 * (env.width + env.height + agent_count/city_count))
     for step in range(max_steps):
         update_values = [[False] * agent_count for _ in range(BATCH_SIZE)]
         action_dict = [{} for _ in range(BATCH_SIZE)]
@@ -200,17 +200,14 @@ while True:
         score += sum(sum(r.values()) for r in rewards) / (agent_count * BATCH_SIZE)
 
         # Check for collisions and episode completion
-        all_done = (step == (max_steps - 1)) or any(d['__all__'] for d in done)
-        if any(is_collision(a, i) for i in range(BATCH_SIZE) for a in range(agent_count)):
-            collision = True
-            # done['__all__'] = True
-
+        all_done = (step == (max_steps - 1)) or all(d['__all__'] for d in done)
+        collision = [[is_collision(a, i) for a in range(agent_count)] for i in range(BATCH_SIZE)]
         # Update replay buffer and train agent
-        if flags.train and (any(update_values) or all_done or all(any(d) for d in done)):
+        if flags.train:
             agent.step(input_tensor,
                        agent_action_buffer,
                        done,
-                       [[is_collision(a, i) for a in range(agent_count)] for i in range(BATCH_SIZE)],
+                       collision,
                        flags.step_reward,
                        flags.collision_reward)
             agent_obs_buffer = agent_obs.clone()
@@ -233,17 +230,23 @@ while True:
         #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
         #     break
 
-
-    current_collisions, mean_collisions = get_means(current_collisions, mean_collisions, int(collision), episode)
+    current_collisions, mean_collisions = get_means(current_collisions, mean_collisions,
+                                                    sum(i for c in collision for i in c) / (BATCH_SIZE * agent_count),
+                                                    episode)
     current_score, mean_score = get_means(current_score, mean_score, score / max_steps, episode)
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
     current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
+    current_done, mean_done = get_means(current_done, mean_done,
+                                        sum(d[i] for d in done for i in range(agent_count)) / (
+                                                    BATCH_SIZE * agent_count),
+                                        episode)
 
     print(f'\rBatch {episode:>4} - Episode {BATCH_SIZE * episode:>6} - Agents: {agent_count:>3}'
-          f' | Score: {current_score:.4f}, {mean_score:.4f}' 
+          f' | Score: {current_score:.4f}, {mean_score:.4f}'
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'
           f' | Collisions: {100 * current_collisions:5.2f}%, {100 * mean_collisions:5.2f}%'
+          f' | Finished: {100 * current_done:5.2f}%, {100 * mean_done:5.2f}%'
           f' | Episode/s: {BATCH_SIZE * episode / (time.time() - start_time):.4f}s', end='')
 
     print("")

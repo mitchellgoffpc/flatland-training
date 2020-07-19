@@ -13,6 +13,7 @@ except:
 
 
 class Generator:
+
     def __init__(self, path, start_index=0):
         self.path = path
         self.index = start_index
