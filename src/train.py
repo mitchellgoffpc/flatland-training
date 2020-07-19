@@ -34,24 +34,17 @@ boolean = lambda x: str(x).lower() == 'true'
 parser.add_argument("--train", type=boolean, default=True, help="Whether to train the model or just evaluate it")
 parser.add_argument("--load-model", default=False, action='store_true',
                     help="Whether to load the model from the last checkpoint")
-parser.add_argument("--load-railways", type=boolean, default=True,
-                    help="Whether to load in pre-generated railway networks")
-parser.add_argument("--report-interval", type=int, default=100, help="Iterations between reports")
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
 
 # Environment parameters
-parser.add_argument("--tree-depth", type=int, default=3, help="Depth of the observation tree")
+parser.add_argument("--tree-depth", type=int, default=2, help="Depth of the observation tree")
 parser.add_argument("--model-depth", type=int, default=3, help="Depth of the observation tree")
-parser.add_argument("--hidden-factor", type=int, default=16, help="Depth of the observation tree")
+parser.add_argument("--hidden-factor", type=int, default=48, help="Depth of the observation tree")
 parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the observation tree")
-
-parser.add_argument("--environment-width", type=int, default=35, help="Depth of the observation tree")
-parser.add_argument("--agent-factor", type=float, default=1.1, help="Depth of the observation tree")
+parser.add_argument("--observation-size", type=int, default=4, help="Depth of the observation tree")
 
 # Training parameters
-parser.add_argument("--num-episodes", type=int, default=10 ** 6, help="Number of episodes to train for")
-parser.add_argument("--epsilon-decay", type=float, default=0, help="Decay factor for epsilon-greedy exploration")
 parser.add_argument("--step-reward", type=float, default=-1e-2, help="Depth of the observation tree")
 parser.add_argument("--collision-reward", type=float, default=-2, help="Depth of the observation tree")
 parser.add_argument("--global-environment", type=boolean, default=True, help="Depth of the observation tree")
@@ -80,14 +73,11 @@ agent = DQN_Agent(state_size,
                   flags.squeeze_heads,
                   flags.global_environment)
 if flags.load_model:
-    start, eps = agent.load(project_root / 'checkpoints', 0, 1.0)
+    start,_ = agent.load(project_root / 'checkpoints', 0, 1.0)
 else:
-    start, eps = 0, 1.0
+    start = 0
 # We need to either load in some pre-generated railways from disk, or else create a random railway generator.
-if flags.load_railways:
-    rail_generator, schedule_generator = load_precomputed_railways(project_root, start)
-else:
-    rail_generator, schedule_generator = create_random_railways(flags.environment_width, flags.agent_factor)
+rail_generator, schedule_generator = load_precomputed_railways(project_root, start)
 
 # Create the Flatland environment
 environments = [RailEnv(width=40, height=40, number_of_agents=1,
@@ -95,7 +85,7 @@ environments = [RailEnv(width=40, height=40, number_of_agents=1,
                         schedule_generator=schedule_generator,
                         malfunction_generator_and_process_data=malfunction_from_params(
                             MalfunctionParameters(1 / 500, 20, 50)),
-                        obs_builder_object=((LocalObsForRailEnv(4)
+                        obs_builder_object=((LocalObsForRailEnv(flags.observation_size)
                                              if flags.local_environment
                                              else GlobalObsForRailEnv)
                                             if flags.global_environment
@@ -111,9 +101,6 @@ current_score = current_steps = current_collisions = current_done = mean_score =
 
 agent_action_buffer = []
 start_time = time.time()
-
-if not flags.train:
-    eps = 0.0
 
 # Helper function to detect collisions
 ACTIONS = {0: 'B', 1: 'L', 2: 'F', 3: 'R', 4: 'S'}
@@ -167,14 +154,16 @@ episode = 0
 POOL = multiprocessing.Pool()
 
 # Main training loop
-for episode in range(start + 1, flags.num_episodes + 1):
+episode = 0
+while True:
+    episode += 1
     agent.reset()
     obs, info = zip(*[env.reset() for env in environments])
 
     score, steps_taken, collision = 0, 0, False
     agent_count = len(obs[0])
     if flags.global_environment:
-        agent_obs = torch.as_tensor([list(o.values()) for o in obs]).long().to(device)
+        agent_obs = torch.as_tensor([list(o.values()) for o in obs], dtype=torch.float, device=device)
     else:
         agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
         normalize(obs, agent_obs)
@@ -193,7 +182,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
         else:
             input_tensor = torch.cat([agent_obs_buffer.flatten(1, 2), agent_obs.flatten(1, 2)], 1)
         if any(any(inf['action_required']) for inf in info):
-            ret_action = agent.multi_act(input_tensor, eps=eps)
+            ret_action = agent.multi_act(input_tensor)
         else:
             ret_action = update_values
         for idx, act_list in enumerate(ret_action):
@@ -233,7 +222,7 @@ for episode in range(start + 1, flags.num_episodes + 1):
             break
 
         if flags.global_environment:
-            agent_obs = torch.as_tensor([list(o.values()) for o in obs]).long().to(device)
+            agent_obs = torch.as_tensor([list(o.values()) for o in obs], dtype=torch.float, device=device)
         else:
             normalize(obs, agent_obs)
 
@@ -244,9 +233,6 @@ for episode in range(start + 1, flags.num_episodes + 1):
         #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
         #     break
 
-    # Epsilon decay
-    if flags.train:
-        eps = max(0.01, flags.epsilon_decay * eps)
 
     current_collisions, mean_collisions = get_means(current_collisions, mean_collisions, int(collision), episode)
     current_score, mean_score = get_means(current_score, mean_score, score / max_steps, episode)
@@ -258,9 +244,8 @@ for episode in range(start + 1, flags.num_episodes + 1):
           f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'
           f' | Collisions: {100 * current_collisions:5.2f}%, {100 * mean_collisions:5.2f}%'
-          f' | Epsilon: {eps:.2f}'
           f' | Episode/s: {BATCH_SIZE * episode / (time.time() - start_time):.4f}s', end='')
 
     print("")
     if flags.train:
-        agent.save(project_root / 'checkpoints', episode, eps)
+        agent.save(project_root / 'checkpoints', episode)
