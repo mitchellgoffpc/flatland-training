@@ -23,11 +23,11 @@ class Mish(torch.nn.Module):
 class SeparableConvolution(torch.nn.Module):
     def __init__(self, in_features, out_features, kernel_size: typing.Union[int, tuple],
                  padding: typing.Union[int, tuple] = 0, dilation: typing.Union[int, tuple] = 1,
-                 bias=False, dim=1, stride=1, dropout=0.1):
+                 bias=False, dim=1, stride=1, dropout=0.25):
         super(SeparableConvolution, self).__init__()
         self.depthwise = kernel_size > 1 if isinstance(kernel_size, int) else all(k > 1 for k in kernel_size)
         conv = getattr(torch.nn, f'Conv{dim}d')
-        norm = getattr(torch.nn, f'BatchNorm{dim}d')
+        norm = getattr(torch.nn, f'InstanceNorm{dim}d')
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size,) * dim
         if self.depthwise:
@@ -38,13 +38,13 @@ class SeparableConvolution(torch.nn.Module):
                                        dilation=dilation,
                                        bias=False,
                                        stride=stride)
-            self.mid_norm = norm(in_features)
+            self.mid_norm = norm(in_features, affine=True)
         else:
             self.depthwise_conv = nothing
             self.mid_norm = nothing
         self.pointwise_conv = conv(in_features, out_features, (1,) * dim, bias=bias)
         self.str = (f'SeparableConvolution({in_features}, {out_features}, {kernel_size}, '
-                    + f'dilation={dilation}, padding={padding})')
+                    + f'dilation={dilation}, padding={padding}, stride={stride})')
         self.dropout = dropout * (in_features == out_features and (stride == 1 or all(stride) == 1))
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
@@ -62,53 +62,55 @@ class SeparableConvolution(torch.nn.Module):
 
 
 class BasicBlock(torch.nn.Module):
-    def __init__(self, in_features, out_features, stride, init_norm=False):
+    def __init__(self, in_features, out_features, stride, init_norm=False, message_box=None):
         super(BasicBlock, self).__init__()
         self.activate = init_norm
-        self.init_norm = torch.nn.InstanceNorm3d(in_features) if init_norm else nothing
+        self.init_norm = torch.nn.InstanceNorm3d(in_features, affine=True) if init_norm else nothing
         self.init_conv = SeparableConvolution(in_features, out_features, (3, 3, 1), (1, 1, 0),
                                               stride=(stride, stride, 1), dim=3)
-        self.mid_norm = torch.nn.InstanceNorm3d(out_features)
+        self.mid_norm = torch.nn.InstanceNorm3d(out_features, affine=True)
         self.end_conv = SeparableConvolution(out_features, out_features, (3, 3, 1), (1, 1, 0), dim=3)
         self.shortcut = (nothing
                          if stride == 1 and in_features == out_features
                          else SeparableConvolution(in_features, out_features, (3, 3, 1), (1, 1, 0),
                                                    stride=(stride, stride, 1), dim=3))
+        self.message_box = int(out_features ** 0.5) if message_box is None else message_box
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         out = self.init_conv(fn_input if self.activate is None else mish(self.init_norm(fn_input)))
         out = mish(self.mid_norm(out))
-        out = self.end_conv(out)
+        out: torch.Tensor = self.end_conv(out)
+        out[:, :self.message_box] = out[:, :self.message_box].mean(-1,
+                                                                   keepdim=True).expand(-1, -1, -1, -1,
+                                                                                        fn_input.size(-1))
         fn_input = self.shortcut(fn_input)
         out = out + fn_input
         return out
 
-
 class ConvNetwork(torch.nn.Module):
     def __init__(self, state_size, action_size, hidden_size=15, depth=8, kernel_size=7, squeeze_heads=4, cat=True,
-                 debug=True, embedding_size=1):
+                 debug=True, softmax=False):
         super(ConvNetwork, self).__init__()
         _ = state_size
         state_size = 2 * 21
-        self.embedding = torch.nn.Embedding(5, embedding_size)
-        self.net = torch.nn.ModuleList([BasicBlock(embedding_size * state_size if not i else hidden_size,
+        self.net = torch.nn.ModuleList([BasicBlock(state_size if not i else hidden_size,
                                                    hidden_size,
                                                    2,
                                                    init_norm=bool(i))
                                         for i in range(depth)])
-        self.init_norm = torch.nn.InstanceNorm1d(hidden_size)
+        self.init_norm = torch.nn.InstanceNorm1d(hidden_size, affine=True)
         self.linear0 = torch.nn.Conv1d(hidden_size, hidden_size, 1, bias=False)
-        self.mid_norm = torch.nn.InstanceNorm1d(hidden_size)
+        self.mid_norm = torch.nn.InstanceNorm1d(hidden_size, affine=True)
         self.linear1 = torch.nn.Conv1d(hidden_size, action_size, 1)
-        print(self)
+        self.softmax = softmax
 
-    def forward(self, fn_input: torch.Tensor, softmax=False) -> torch.Tensor:
-        out = fn_input.float()
+    def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
+        out = fn_input
         for module in self.net:
             out = module(out)
         out = out.mean((2, 3))
         out = self.linear1(mish(self.mid_norm(self.linear0(mish(self.init_norm(out))))))
-        return torch.nn.functional.softmax(out, 1) if softmax else out
+        return torch.nn.functional.softmax(out, 1) if self.softmax else out
 
 
 def init(module: torch.nn.Module):
@@ -144,12 +146,7 @@ def QNetwork(state_size, action_size, hidden_factor=16, depth=4, kernel_size=7, 
                                 Mish(),
                                 torch.nn.Conv1d(11 * hidden_factor, action_size, 1))
     print(model)
-    if debug:
-        parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, model.parameters()))
-        digits = int(math.log10(parameters))
-        number_string = " kMGTPEZY"[digits // 3]
 
-        print(f"[DEBUG/MODEL] Training with {parameters * 10 ** -(digits // 3 * 3):.1f}{number_string} parameters")
     model.apply(init)
     try:
         model = torch.jit.script(model)
