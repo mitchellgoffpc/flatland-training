@@ -163,7 +163,7 @@ while True:
     score, steps_taken, collision = 0, 0, False
     agent_count = len(obs[0])
     if flags.global_environment:
-        agent_obs = torch.as_tensor([list(o.values()) for o in obs], dtype=torch.float, device=device)
+        agent_obs = torch.as_tensor(obs, dtype=torch.float, device=device)
     else:
         agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
         normalize(obs, agent_obs)
@@ -201,7 +201,7 @@ while True:
 
         # Check for collisions and episode completion
         all_done = (step == (max_steps - 1)) or any(d['__all__'] for d in done)
-        if any(is_collision(a, i) for i, o in enumerate(obs) for a in o):
+        if any(is_collision(a, i) for i in range(BATCH_SIZE) for a in range(agent_count)):
             collision = True
             # done['__all__'] = True
 
@@ -222,7 +222,7 @@ while True:
             break
 
         if flags.global_environment:
-            agent_obs = torch.as_tensor([list(o.values()) for o in obs], dtype=torch.float, device=device)
+            agent_obs = torch.as_tensor(obs, dtype=torch.float, device=device)
         else:
             normalize(obs, agent_obs)
 
