@@ -234,7 +234,7 @@ while True:
                                                     episode)
     current_score, mean_score = get_means(current_score, mean_score, score / max_steps, episode)
     current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
-    current_taken, mean_taken = get_means(current_steps, mean_steps, step, episode)
+    current_taken, mean_taken = get_means(current_taken, mean_taken, step, episode)
     current_done, mean_done = get_means(current_done, mean_done,
                                         sum(d[i] for d in done for i in range(agent_count)) / (
                                                     BATCH_SIZE * agent_count),
