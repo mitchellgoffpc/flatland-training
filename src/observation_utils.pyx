@@ -65,11 +65,12 @@ class GlobalObsForRailEnv(ObservationBuilder):
         - obs_targets: Two 2D arrays (map_height, map_width, 2) containing respectively the position of the given agent\
          target and the positions of the other agents targets (flag only, no counter!).
     """
-    def __init__(self, data_type=np.int8):
+    def __init__(self, data_type=np.int8, return_array=True):
         super(GlobalObsForRailEnv, self).__init__()
         self.size = 0
         self._custom_rail_obs = None
         self.data_type = data_type
+        self.return_array = return_array
     def reset(self):
         if self._custom_rail_obs is None:
             self._custom_rail_obs = np.zeros((1, self.env.height + 2 * self.size, self.env.width + 2 * self.size, 16))
@@ -122,14 +123,14 @@ class GlobalObsForRailEnv(ObservationBuilder):
                 # fifth channel: all ready to depart on this position
                 if other_agent.status == RailAgentStatus.READY_TO_DEPART:
                     obs_agents_state[(agent_id,) + other_agent.initial_position + (4,)] += 1
-        return {i: arr
-                for i, arr in
-                enumerate(np.concatenate([np.repeat(self.rail_obs, agent_count, 0), obs_agents_state], -1))}
+        if self.return_array:
+            return obs_agents_state
+        return dict(enumerate(np.concatenate([np.repeat(self.rail_obs, agent_count, 0), obs_agents_state], -1)))
 
 
 class LocalObsForRailEnv(GlobalObsForRailEnv):
-    def __init__(self, size=7):
-        super(LocalObsForRailEnv, self).__init__()
+    def __init__(self, size=7, return_array=True):
+        super(LocalObsForRailEnv, self).__init__(return_array=return_array)
         self.size = size
     def get_many(self, list trash):
         cdef int agent_count = len(self.env.agents)
@@ -179,8 +180,9 @@ class LocalObsForRailEnv(GlobalObsForRailEnv):
                     dist1 = agent_virtual_position[1] - init_pos[1]
                     if abs(dist0) < self.size and abs(dist1) < self.size:
                         obs_agents_state[agent_id, dist0 + self.size, dist1 + self.size, 4] += 1
-        return obs_agents_state
-
+        if self.return_array:
+            return obs_agents_state
+        return dict(enumerate(obs_agents_state))
 
 class TreeObservation(ObservationBuilder):
     def __init__(self, max_depth):
@@ -323,7 +325,8 @@ class TreeObservation(ObservationBuilder):
                             self.edges_with_malfunctions[(*start.position, start_direction)][agent.handle] = \
                                 (distance, agent.malfunction_data['malfunction'])
         cdef dict data = super().get_many(handles)
-        return tuple(tuple(dat.values()) for dat in data)
+        return data
+        #return tuple(data.values())
 
     # Compute the observation for a single agent
     def get(self, int handle):
