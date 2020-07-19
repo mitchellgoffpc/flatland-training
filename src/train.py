@@ -197,7 +197,7 @@ while True:
 
         # Environment step
         obs, rewards, done, info = tuple(zip(*[e.step(a) for e, a in zip(environments, action_dict)]))
-        score += sum(sum(r.values()) for r in rewards) / (agent_count * BATCH_SIZE)
+        score += sum(i for r in rewards for i in r.values()) / (agent_count * BATCH_SIZE)
 
         # Check for collisions and episode completion
         all_done = (step == (max_steps - 1)) or all(d['__all__'] for d in done)
@@ -229,7 +229,6 @@ while True:
         #     render()
         #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
         #     break
-
     current_collisions, mean_collisions = get_means(current_collisions, mean_collisions,
                                                     sum(i for c in collision for i in c) / (BATCH_SIZE * agent_count),
                                                     episode)
