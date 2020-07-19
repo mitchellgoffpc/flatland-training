@@ -1,13 +1,14 @@
+import math
 import pickle
-import random
 
+import numpy as np
 import torch
 from torch_optimizer import Yogi as Optimizer
 
 try:
-    from .model import QNetwork, ConvNetwork
+    from .model import QNetwork, ConvNetwork, init
 except:
-    from model import QNetwork, ConvNetwork
+    from model import QNetwork, ConvNetwork, init
 import os
 
 BUFFER_SIZE = 500_000
@@ -15,7 +16,7 @@ BATCH_SIZE = 256
 GAMMA = 0.998
 TAU = 1e-3
 CLIP_FACTOR = 0.2
-LR = 4e-5
+LR = 1e-4
 UPDATE_EVERY = 1
 DOUBLE_DQN = False
 CUDA = True
@@ -23,11 +24,9 @@ CUDA = True
 device = torch.device("cuda:0" if CUDA and torch.cuda.is_available() else "cpu")
 
 
-
-
 class Agent:
     def __init__(self, state_size, action_size, model_depth, hidden_factor, kernel_size, squeeze_heads,
-                 use_global=False):
+                 use_global=False, softmax=True, debug=True):
         self.action_size = action_size
 
         # Q-Network
@@ -40,24 +39,33 @@ class Agent:
                               hidden_factor,
                               model_depth,
                               kernel_size,
-                              squeeze_heads).to(device)
+                              squeeze_heads,
+                              softmax=softmax).to(device)
         self.old_policy = network(state_size,
                                   action_size,
                                   hidden_factor,
                                   model_depth,
                                   kernel_size,
                                   squeeze_heads,
+                                  softmax=softmax,
                                   debug=False).to(device)
-        if CUDA:
+        if debug:
+            print(self.policy)
+
+            parameters = sum(np.prod(p.size()) for p in filter(lambda p: p.requires_grad, self.policy.parameters()))
+            digits = int(math.log10(parameters))
+            number_string = " kMGTPEZY"[digits // 3]
+
+            print(f"[DEBUG/MODEL] Training with {parameters * 10 ** -(digits // 3 * 3):.1f}"
+                  f"{number_string} parameters")
+        self.policy.apply(init)
+        try:
+            self.policy = torch.jit.script(self.policy)
+            self.old_policy = torch.jit.script(self.old_policy)
+        except:
+            import traceback
+            traceback.print_exc()
             print("NO JIT")
-        else:
-            try:
-                self.policy = torch.jit.script(self.policy)
-                self.old_policy = torch.jit.script(self.old_policy)
-            except:
-                import traceback
-                traceback.print_exc()
-                print("NO JIT")
         self.old_policy.load_state_dict(self.policy.state_dict())
         self.optimizer = Optimizer(self.policy.parameters(), lr=LR, weight_decay=1e-2)
 
@@ -68,34 +76,14 @@ class Agent:
     def reset(self):
         self.finished = False
 
-    # Decide on an action to take in the environment
-
-    def act(self, state, eps=0.):
-        agent_count = len(state)
-        state = torch.stack(state, -1).unsqueeze(0).to(device)
-        self.policy.eval()
-        with torch.no_grad():
-            action_values = self.policy(state)
-
-        # Epsilon-greedy action selection
-        return [torch.argmax(action_values[:, :, i], 1).item()
-                if random.random() > eps
-                else torch.randint(self.action_size, ()).item()
-                for i in range(agent_count)]
-
-    def multi_act(self, state, eps=0.):
-        agent_count = state.size(-1)
+    def multi_act(self, state):
         state = state.to(device)
         self.policy.eval()
         with torch.no_grad():
             action_values = self.policy(state)
 
         # Epsilon-greedy action selection
-        return [[torch.argmax(act[:, i], 0).item()
-                 if random.random() > eps
-                 else torch.randint(self.action_size, ()).item()
-                 for i in range(agent_count)]
-                for act in action_values.__iter__()]
+        return action_values.argmax(1).detach().cpu().numpy()
 
     # Record the results of the agent's action and update the model
 
@@ -120,8 +108,9 @@ class Agent:
     def learn(self, states, actions, rewards):
         self.policy.train()
         actions.unsqueeze_(1)
-        responsible_outputs = self.policy(states, True).gather(1, actions)
-        old_responsible_outputs = self.old_policy(states, True).gather(1, actions)
+        responsible_outputs = self.policy(states).gather(1, actions)
+        with torch.no_grad():
+            old_responsible_outputs = self.old_policy(states).gather(1, actions)
         old_responsible_outputs.detach_()
         ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
         ratio.squeeze_(1)
