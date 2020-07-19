@@ -65,10 +65,11 @@ class GlobalObsForRailEnv(ObservationBuilder):
         - obs_targets: Two 2D arrays (map_height, map_width, 2) containing respectively the position of the given agent\
          target and the positions of the other agents targets (flag only, no counter!).
     """
-    def __init__(self):
+    def __init__(self, data_type=np.int8):
         super(GlobalObsForRailEnv, self).__init__()
         self.size = 0
         self._custom_rail_obs = None
+        self.data_type = data_type
     def reset(self):
         if self._custom_rail_obs is None:
             self._custom_rail_obs = np.zeros((1, self.env.height + 2 * self.size, self.env.width + 2 * self.size, 16))
@@ -80,14 +81,14 @@ class GlobalObsForRailEnv(ObservationBuilder):
                                                                                            range(self.env.width)]
                                                                                           for i in
                                                                                           range(self.env.height)]],
-                                                                                        dtype=np.int64)
+                                                                                        dtype=self.data_type)
 
     def get_many(self, list trash):
         cdef int agent_count = len(self.env.agents)
         cdef cnp.ndarray obs_agents_state = np.zeros((agent_count,
                                                       self.env.height,
                                                       self.env.width,
-                                                      5), dtype=np.int64)
+                                                      5), dtype=self.data_type)
         cdef int i, agent_id
         cdef tuple pos, agent_virtual_position
         for agent_id, agent in enumerate(self.env.agents):
@@ -135,7 +136,7 @@ class LocalObsForRailEnv(GlobalObsForRailEnv):
         obs_agents_state = np.zeros((agent_count,
                                      self.size * 2 + 1,
                                      self.size * 2 + 1,
-                                     21), dtype=np.int64)
+                                     21), dtype=np.float32)
         cdef int i, agent_id
         cdef tuple agent_virtual_position
         for agent_id, agent in enumerate(self.env.agents):
@@ -178,9 +179,7 @@ class LocalObsForRailEnv(GlobalObsForRailEnv):
                     dist1 = agent_virtual_position[1] - init_pos[1]
                     if abs(dist0) < self.size and abs(dist1) < self.size:
                         obs_agents_state[agent_id, dist0 + self.size, dist1 + self.size, 4] += 1
-        return {i: arr
-                for i, arr in
-                enumerate(obs_agents_state)}
+        return obs_agents_state
 
 
 class TreeObservation(ObservationBuilder):
@@ -323,8 +322,8 @@ class TreeObservation(ObservationBuilder):
                         for start, _, start_direction, distance in self.edge_positions[(*agent.position, direction)]:
                             self.edges_with_malfunctions[(*start.position, start_direction)][agent.handle] = \
                                 (distance, agent.malfunction_data['malfunction'])
-
-        return super().get_many(handles)
+        cdef dict data = super().get_many(handles)
+        return tuple(tuple(dat.values()) for dat in data)
 
     # Compute the observation for a single agent
     def get(self, int handle):
