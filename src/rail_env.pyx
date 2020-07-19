@@ -337,8 +337,7 @@ class RailEnv(Environment):
             'status': {i: agent.status for i, agent in enumerate(self.agents)}
         }
         # Return the new observation vectors for each agent
-        cdef dict observation_dict = self._get_observations()
-        return observation_dict, info_dict
+        return self._get_observations(), info_dict
 
     def _fix_agent_after_malfunction(self, agent: EnvAgent):
         """
