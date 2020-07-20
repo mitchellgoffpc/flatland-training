@@ -23,7 +23,7 @@ class SeparableConvolution(torch.nn.Module):
                  padding: typing.Union[int, tuple] = 0, dilation: typing.Union[int, tuple] = 1,
                  bias=False, dim=1, stride=1, dropout=0.25):
         super(SeparableConvolution, self).__init__()
-        self.depthwise = kernel_size > 1 if isinstance(kernel_size, int) else all(k > 1 for k in kernel_size)
+        self.depthwise = kernel_size > 1 if isinstance(kernel_size, int) else any(k > 1 for k in kernel_size)
         conv = getattr(torch.nn, f'Conv{dim}d')
         norm = getattr(torch.nn, f'InstanceNorm{dim}d')
         if isinstance(kernel_size, int):
@@ -43,7 +43,7 @@ class SeparableConvolution(torch.nn.Module):
         self.pointwise_conv = conv(in_features, out_features, (1,) * dim, bias=bias)
         self.str = (f'SeparableConvolution({in_features}, {out_features}, {kernel_size}, '
                     + f'dilation={dilation}, padding={padding}, stride={stride})')
-        self.dropout = dropout * (in_features == out_features and (stride == 1 or all(stride) == 1))
+        self.dropout = dropout * (in_features == out_features and (stride == 1 or all(s == 1 for s in stride)))
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         if torch.rand(1) < self.dropout:
@@ -68,10 +68,11 @@ class BasicBlock(torch.nn.Module):
                                               stride=(stride, stride, 1), dim=3)
         self.mid_norm = torch.nn.InstanceNorm3d(out_features, affine=True)
         self.end_conv = SeparableConvolution(out_features, out_features, (3, 3, 1), (1, 1, 0), dim=3)
-        self.shortcut = (nothing
-                         if stride == 1 and in_features == out_features
-                         else SeparableConvolution(in_features, out_features, (1, 1, 1), (0, 0, 0),
-                                                   stride=(stride, stride, 1), dim=3))
+        self.shortcut = torch.nn.Sequential()
+        if stride > 1:
+            self.shortcut.add_module("1", torch.nn.AvgPool3d((stride, stride, 1), padding=(1,1,0)))
+        if in_features != out_features:
+            self.shortcut.add_module("2", torch.nn.Conv3d(in_features, out_features, 1))
         self.message_box = int(out_features ** 0.5) if message_box is None else message_box
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
@@ -81,9 +82,10 @@ class BasicBlock(torch.nn.Module):
         out[:, :self.message_box] = out[:, :self.message_box].mean(-1,
                                                                    keepdim=True).expand(-1, -1, -1, -1,
                                                                                         fn_input.size(-1))
-        fn_input = self.shortcut(fn_input)
-        out = out + fn_input
+        srt = self.shortcut(fn_input)
+        out = out + srt
         return out
+
 
 class ConvNetwork(torch.nn.Module):
     def __init__(self, state_size, action_size, hidden_size=15, depth=8, kernel_size=7, squeeze_heads=4, cat=True,
