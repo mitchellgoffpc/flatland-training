@@ -72,11 +72,11 @@ agent = DQN_Agent(state_size,
                   flags.squeeze_heads,
                   flags.global_environment)
 if flags.load_model:
-    start, _ = agent.load(project_root / 'checkpoints', 0, 1.0)
+    start, = agent.load(project_root / 'checkpoints', 0)
 else:
     start = 0
 # We need to either load in some pre-generated railways from disk, or else create a random railway generator.
-rail_generator, schedule_generator = load_precomputed_railways(project_root, start)
+rail_generator, schedule_generator = load_precomputed_railways(project_root, start * BATCH_SIZE)
 
 # Create the Flatland environment
 environments = [RailEnv(width=40, height=40, number_of_agents=1,
@@ -153,7 +153,7 @@ episode = 0
 POOL = multiprocessing.Pool()
 
 # Main training loop
-episode = 0
+episode = start
 while True:
     episode += 1
     agent.reset()
