@@ -241,10 +241,9 @@ class RailEnv(Environment):
         True: Agent needs to provide an action
         False: Agent cannot provide an action
         """
-        return (agent.status == RailAgentStatus.READY_TO_DEPART or (
-                agent.status == RailAgentStatus.ACTIVE and np.isclose(agent.speed_data['position_fraction'], 0.0,
-                                                                      rtol=1e-03)))
 
+        return (agent.status == RailAgentStatus.READY_TO_DEPART or (
+                agent.status == RailAgentStatus.ACTIVE and agent.speed_data['position_fraction'] == 0))
     def reset(self) -> (Dict, Dict):
         """
         reset(regenerate_rail, regenerate_schedule, activate_agents, random_seed)
@@ -441,13 +440,17 @@ class RailEnv(Environment):
             self._fix_agent_after_malfunction(agent)
 
         # Check for end of episode + set global reward to all rewards!
-        if have_all_agents_ended:
-            self.dones["__all__"] = True
-            self.rewards_dict = {i: self.global_reward for i in range(self.get_num_agents())}
         if (self._max_episode_steps is not None) and (self._elapsed_steps >= self._max_episode_steps):
             self.dones["__all__"] = True
             for i_agent in range(self.get_num_agents()):
                 self.dones[i_agent] = True
+        if have_all_agents_ended:
+            self.dones["__all__"] = True
+            self.rewards_dict = {i: self.global_reward * (1 - self.dones[i]) for i in range(self.get_num_agents())}
+        else:
+            for i_agent in range(self.get_num_agents()):
+                if self.dones[i_agent]:
+                    self.rewards_dict[i_agent] = 0
         if self.record_steps:
             self.record_timestep(action_dict_)
 
@@ -493,7 +496,7 @@ class RailEnv(Environment):
         # Is the agent at the beginning of the cell? Then, it can take an action.
         # As long as the agent is malfunctioning or stopped at the beginning of the cell,
         # different actions may be taken!
-        if np.isclose(agent.speed_data['position_fraction'], 0.0, rtol=1e-03):
+        if agent.speed_data['position_fraction'] == 0:
             # No action has been supplied for this agent -> set DO_NOTHING as default
             if action is None:
                 action = DO_NOTHING
@@ -553,8 +556,7 @@ class RailEnv(Environment):
         #   transition_action_on_cellexit if the cell is free.
         if agent.moving:
             agent.speed_data['position_fraction'] += agent.speed_data['speed']
-            if agent.speed_data['position_fraction'] > 1.0 or np.isclose(agent.speed_data['position_fraction'], 1.0,
-                                                                         rtol=1e-03):
+            if agent.speed_data['position_fraction'] > 1.0-1e-3:
                 # Perform stored action to transition to the next cell as soon as cell is free
                 # Notice that we've already checked new_cell_valid and transition valid when we stored the action,
                 # so we only have to check cell_free now!
