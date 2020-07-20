@@ -108,15 +108,17 @@ class Agent:
     def learn(self, states, actions, rewards):
         self.policy.train()
         actions.unsqueeze_(1)
-        responsible_outputs = self.policy(states).gather(1, actions)
+
         with torch.no_grad():
-            old_responsible_outputs = self.old_policy(states).gather(1, actions)
+            states_clone = states.clone()
+            states_clone.requires_grad_(False)
+            old_responsible_outputs = self.old_policy(states_clone).gather(1, actions)
         old_responsible_outputs.detach_()
+        responsible_outputs = self.policy(states).gather(1, actions)
         ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
         ratio.squeeze_(1)
         clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
         loss = -torch.min(ratio * rewards, clamped_ratio * rewards).sum(-1).mean()
-
         self.old_policy.load_state_dict(self.policy.state_dict())
         self.optimizer.zero_grad()
         loss.backward()
