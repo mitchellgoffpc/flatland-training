@@ -92,11 +92,10 @@ environments = [RailEnv(width=40, height=40, number_of_agents=1,
                         random_seed=i)
                 for i in range(BATCH_SIZE)]
 env = environments[0]
-torch.autograd.set_detect_anomaly(True)
 # After training we want to render the results so we also load a renderer
 
 # Add some variables to keep track of the progress
-current_score = current_steps = current_collisions = current_done = mean_score = mean_steps = mean_collisions = mean_done = current_taken = mean_taken = None
+current_score = current_collisions = current_done = mean_score = mean_collisions = mean_done = current_taken = mean_taken = current_finished = mean_finished = None
 
 agent_action_buffer = []
 start_time = time.time()
@@ -158,8 +157,8 @@ while True:
     episode += 1
     agent.reset()
     obs, info = zip(*[env.reset() for env in environments])
-
-    score, steps_taken, collision = 0, 0, False
+    episode_start = time.time()
+    score, collision = 0, False
     agent_count = len(obs[0])
     if flags.global_environment:
         agent_obs = torch.as_tensor(obs, dtype=torch.float, device=device)
@@ -171,29 +170,16 @@ while True:
     agent_action_buffer = [[2] * agent_count for _ in range(BATCH_SIZE)]
 
     # Run an episode
-    city_count = (env.width * env.height)//300
-    max_steps = int(8 * (env.width + env.height + agent_count/city_count))
+    city_count = (env.width * env.height) // 300
+    max_steps = int(8 * (env.width + env.height + agent_count / city_count))
     for step in range(max_steps):
-        update_values = [[False] * agent_count for _ in range(BATCH_SIZE)]
-        action_dict = [{} for _ in range(BATCH_SIZE)]
         if flags.global_environment:
             input_tensor = torch.cat([agent_obs_buffer, agent_obs], -1)
             input_tensor.transpose_(1, -1)
         else:
             input_tensor = torch.cat([agent_obs_buffer.flatten(1, 2), agent_obs.flatten(1, 2)], 1)
-        if any(any(inf['action_required']) for inf in info):
-            ret_action = agent.multi_act(input_tensor)
-        else:
-            ret_action = update_values
-        for idx, act_list in enumerate(ret_action):
-            for sub_idx, act in enumerate(act_list):
-                if info[idx]['action_required'][sub_idx]:
-                    action_dict[idx][sub_idx] = act
-                    # action_dict[a] = np.random.randint(5)
-                    update_values[idx][sub_idx] = True
-                    steps_taken += 1
-                else:
-                    action_dict[idx][sub_idx] = 0
+        ret_action = agent.multi_act(input_tensor)
+        action_dict = [dict(enumerate(act_list)) for act_list in ret_action]
 
         # Environment step
         obs, rewards, done, info = tuple(zip(*[e.step(a) for e, a in zip(environments, action_dict)]))
@@ -233,20 +219,22 @@ while True:
                                                     sum(i for c in collision for i in c) / (BATCH_SIZE * agent_count),
                                                     episode)
     current_score, mean_score = get_means(current_score, mean_score, score / max_steps, episode)
-    current_steps, mean_steps = get_means(current_steps, mean_steps, steps_taken / BATCH_SIZE / agent_count, episode)
     current_taken, mean_taken = get_means(current_taken, mean_taken, step, episode)
     current_done, mean_done = get_means(current_done, mean_done,
                                         sum(d[i] for d in done for i in range(agent_count)) / (
-                                                    BATCH_SIZE * agent_count),
+                                                BATCH_SIZE * agent_count),
                                         episode)
+    current_finished, mean_finished = get_means(current_finished, mean_finished,
+                                                sum(d['__all__'] for d in done) / BATCH_SIZE,
+                                                episode)
 
     print(f'\rBatch {episode:>4} - Episode {BATCH_SIZE * episode:>6} - Agents: {agent_count:>3}'
           f' | Score: {current_score:.4f}, {mean_score:.4f}'
-          f' | Agent-Steps: {current_steps:6.1f}, {mean_steps:6.1f}'
           f' | Steps Taken: {current_taken:6.1f}, {mean_taken:6.1f}'
-          f' | Collisions: {100 * current_collisions:5.2f}%, {100 * mean_collisions:5.2f}%'
-          f' | Finished: {100 * current_done:5.2f}%, {100 * mean_done:5.2f}%'
-          f' | Episode/s: {BATCH_SIZE * episode / (time.time() - start_time):.4f}s', end='')
+          f' | Collisions: {100 * current_collisions:6.2f}%, {100 * mean_collisions:6.2f}%'
+          f' | Agent Done: {100 * current_done:6.2f}%, {100 * mean_done:6.2f}%'
+          f' | Finished: {100 * current_finished:6.2f}%, {100 * mean_finished:6.2f}%'
+          f' | Episode/s: {BATCH_SIZE * episode / (time.time() - start_time):7.4f}s - Took: {time.time()-episode_start:7.1f}', end='')
 
     print("")
     if flags.train:
