@@ -44,7 +44,7 @@ parser.add_argument("--render-interval", type=int, default=0, help="Iterations b
 
 # Environment parameters
 parser.add_argument("--tree-depth", type=int, default=2, help="Depth of the observation tree")
-parser.add_argument("--model-depth", type=int, default=3, help="Depth of the observation tree")
+parser.add_argument("--model-depth", type=int, default=5, help="Depth of the observation tree")
 parser.add_argument("--hidden-factor", type=int, default=48, help="Depth of the observation tree")
 parser.add_argument("--kernel-size", type=int, default=1, help="Depth of the observation tree")
 parser.add_argument("--squeeze-heads", type=int, default=4, help="Depth of the observation tree")
@@ -185,7 +185,7 @@ while True:
     # env_renderer.reset()
     episode_start = time.time()
     score, collision = 0, False
-    agent_count = len(obs[0])
+    agent_count = len(environments[0].agents)
     if model_type == 1:
         agent_obs = as_tensor(obs)
         agent_obs_buffer = agent_obs.clone()
@@ -235,9 +235,7 @@ while True:
                        collision,
                        flags.step_reward,
                        flags.collision_reward)
-            for idx, act in enumerate(action_dict):
-                for key, value in act.items():
-                    agent_action_buffer[idx][key] = value
+            agent_action_buffer = [[act[i] for i in range(agent_count)] for act in action_dict]
 
         if all_done:
             break

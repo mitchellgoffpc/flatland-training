@@ -148,14 +148,16 @@ class GlobalStateNetwork(torch.nn.Module):
                                                     agent_dim=False)
                                          for i in range(depth)])
         self.decoder = torch.nn.Sequential(*[layer
-                                             for i in range(decoder_depth - 1)
+                                             for i in range(decoder_depth)
                                              for layer in (torch.nn.Conv1d(hidden_size + (0 if i else agent_state_size),
                                                                            hidden_size,
                                                                            1,
                                                                            bias=False),
                                                            torch.nn.InstanceNorm1d(hidden_size, affine=True),
                                                            Mish())],
-                                           torch.nn.Conv1d(hidden_size, action_size, 1))
+                                           torch.nn.Conv1d(hidden_size + (0 if decoder_depth else agent_state_size),
+                                                           action_size,
+                                                           1))
         self.softmax = softmax
 
         self.register_buffer("base_zero", torch.zeros(1))
