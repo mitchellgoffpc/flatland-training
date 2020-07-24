@@ -132,7 +132,7 @@ class Agent:
         ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
         ratio.squeeze_(1)
         clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
-        loss = -torch.min(ratio * rewards, clamped_ratio * rewards).sum(-1).mean()
+        loss = -torch.min(ratio * rewards, clamped_ratio * rewards).sum(-1).max()
         self.old_policy.load_state_dict(self.policy.state_dict())
         self.optimizer.zero_grad()
         loss.backward()
