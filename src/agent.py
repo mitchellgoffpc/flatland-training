@@ -6,9 +6,9 @@ import torch
 from torch_optimizer import Yogi as Optimizer
 
 try:
-    from .model import QNetwork, ConvNetwork, init
+    from .model import QNetwork, ConvNetwork, init, GlobalStateNetwork
 except:
-    from model import QNetwork, ConvNetwork, init
+    from model import QNetwork, ConvNetwork, init, GlobalStateNetwork
 import os
 
 BUFFER_SIZE = 500_000
@@ -25,21 +25,24 @@ device = torch.device("cuda:0" if CUDA and torch.cuda.is_available() else "cpu")
 
 
 class Agent:
-    def __init__(self, state_size, action_size, model_depth, hidden_factor, kernel_size, squeeze_heads,
-                 use_global=False, softmax=True, debug=True):
+    def __init__(self, state_size, action_size, model_depth, hidden_factor, kernel_size, squeeze_heads, decoder_depth,
+                 model_type=0, softmax=True, debug=True):
         self.action_size = action_size
 
         # Q-Network
-        if use_global:
+        if model_type == 1:  # Global/Local
             network = ConvNetwork
-        else:
+        elif model_type == 0:  # Tree
             network = QNetwork
+        else:  # Global State
+            network = GlobalStateNetwork
         self.policy = network(state_size,
                               action_size,
                               hidden_factor,
                               model_depth,
                               kernel_size,
                               squeeze_heads,
+                              decoder_depth,
                               softmax=softmax).to(device)
         self.old_policy = network(state_size,
                                   action_size,
@@ -47,6 +50,7 @@ class Agent:
                                   model_depth,
                                   kernel_size,
                                   squeeze_heads,
+                                  decoder_depth,
                                   softmax=softmax,
                                   debug=False).to(device)
         if debug:
@@ -74,13 +78,17 @@ class Agent:
         self.t_step = 0
 
     def reset(self):
-        self.finished = False
+        self.policy.reset_cache()
+        self.old_policy.reset_cache()
 
     def multi_act(self, state):
-        state = state.to(device)
+        if isinstance(state, tuple):
+            state = tuple(s.to(device) for s in state)
+        elif isinstance(state, torch.Tensor):
+            state = (state.to(device),)
         self.policy.eval()
         with torch.no_grad():
-            action_values = self.policy(state)
+            action_values = self.policy(*state)
 
         # Epsilon-greedy action selection
         return action_values.argmax(1).detach().cpu().numpy()
@@ -101,7 +109,12 @@ class Agent:
                                      else (collision_reward if c else step_reward) for ad, c in zip(ad_batch, c_batch)]
                                     for ad_batch, c_batch in zip(ad_step, c_step)]
                                    for ad_step, c_step in zip(self.stack[2], self.stack[3])]).flatten(0, 1).to(device)
-            state = torch.cat(self.stack[0], 0).to(device)
+            state = self.stack[0]
+            if isinstance(state[0], tuple):
+                state = zip(*state)
+                state = tuple(torch.cat(st, 0).to(device) for st in state)
+            elif isinstance(state[0], torch.Tensor):
+                state = (torch.cat(state, 0).to(device),)
             self.stack = [[] for _ in range(4)]
             self.learn(state, action, reward)
 
@@ -110,11 +123,12 @@ class Agent:
         actions.unsqueeze_(1)
 
         with torch.no_grad():
-            states_clone = states.clone()
-            states_clone.requires_grad_(False)
-            old_responsible_outputs = self.old_policy(states_clone).gather(1, actions)
+            states_clone = tuple(st.clone() for st in states)
+            for st in states:
+                st.requires_grad_(False)
+            old_responsible_outputs = self.old_policy(*states_clone).gather(1, actions)
         old_responsible_outputs.detach_()
-        responsible_outputs = self.policy(states).gather(1, actions)
+        responsible_outputs = self.policy(*states).gather(1, actions)
         ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
         ratio.squeeze_(1)
         clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)

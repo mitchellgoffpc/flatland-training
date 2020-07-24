@@ -49,7 +49,7 @@ class Generator:
 
 
 class RailGenerator:
-    def __init__(self, width=35, base=1.5):
+    def __init__(self, width=35, base=1.5, factor=2):
         self.rail_generator = sparse_rail_generator(grid_mode=False,
                                                     max_num_cities=max(2, width ** 2 // 300),
                                                     max_rails_between_cities=2,
@@ -58,31 +58,33 @@ class RailGenerator:
         self.top_idx = 0
         self.width = width
         self.base = base
+        self.factor = factor
 
     def __next__(self):
         self.sub_idx += 1
         if self.sub_idx == BATCH_SIZE:
             self.sub_idx = 0
             self.top_idx += 1
-        return self.rail_generator(self.width, self.width, int(2 * self.base ** self.top_idx), np_random=np.random)
+        return self.rail_generator(self.width, self.width, int(self.factor * self.base ** self.top_idx), np_random=np.random)
 
     def __call__(self, *args, **kwargs):
         return next(self)
 
 
 class ScheduleGenerator:
-    def __init__(self, base=1.5):
+    def __init__(self, base=1.5, factor=2):
         self.schedule_generator = sparse_schedule_generator({1.: 1.})
         self.sub_idx = 0
         self.top_idx = 0
         self.base = base
+        self.factor = factor
 
     def __next__(self, rail, hints):
         if self.sub_idx == BATCH_SIZE:
             self.sub_idx = 0
             self.top_idx += 1
         self.sub_idx += 1
-        return self.schedule_generator(rail, int(2 * self.base ** self.top_idx), hints, np_random=np.random)
+        return self.schedule_generator(rail, int(self.factor * self.base ** self.top_idx), hints, np_random=np.random)
 
     def __call__(self, rail, _, hints, *args, **kwargs):
         return self.__next__(rail, hints)
@@ -92,17 +94,17 @@ class ScheduleGenerator:
 def load_precomputed_railways(project_root, start_index, big=False):
     prefix = os.path.join(project_root, 'railroads')
     if big:
-        suffix = f'_110.pkl'
+        suffix = f'_35_6.pkl'
     else:
         suffix = f'_50.pkl'
-    sched = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
-    rail = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
-    #if big:
-    #    sched, rail = rail, sched
+    rail = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
+    sched = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
+    if not big:
+        sched, rail = rail, sched
     print(f"Working on {len(rail)} tracks")
     return rail, sched
 
 
 # Helper function to generate railways on the fly
-def create_random_railways(width, base=1.1):
-    return RailGenerator(width=width, base=base), ScheduleGenerator(base=base)
+def create_random_railways(width, base=1.1, factor=2):
+    return RailGenerator(width=width, base=base, factor=factor), ScheduleGenerator(base=base, factor=factor)

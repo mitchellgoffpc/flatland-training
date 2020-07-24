@@ -21,7 +21,7 @@ class Mish(torch.nn.Module):
 class SeparableConvolution(torch.nn.Module):
     def __init__(self, in_features, out_features, kernel_size: typing.Union[int, tuple],
                  padding: typing.Union[int, tuple] = 0, dilation: typing.Union[int, tuple] = 1,
-                 bias=False, dim=1, stride=1, dropout=0.25):
+                 bias=False, dim=1, stride: typing.Union[int, tuple] = 1, dropout=0.25):
         super(SeparableConvolution, self).__init__()
         self.depthwise = kernel_size > 1 if isinstance(kernel_size, int) else any(k > 1 for k in kernel_size)
         conv = getattr(torch.nn, f'Conv{dim}d')
@@ -60,36 +60,48 @@ class SeparableConvolution(torch.nn.Module):
 
 
 class BasicBlock(torch.nn.Module):
-    def __init__(self, in_features, out_features, stride, init_norm=False, message_box=None):
+    def __init__(self, in_features, out_features, stride, init_norm=False, message_box=None, double=True,
+                 agent_dim=True):
         super(BasicBlock, self).__init__()
         self.activate = init_norm
-        self.init_norm = torch.nn.InstanceNorm3d(in_features, affine=True) if init_norm else nothing
-        self.init_conv = SeparableConvolution(in_features, out_features, (3, 3, 1), (1, 1, 0),
-                                              stride=(stride, stride, 1), dim=3)
-        self.mid_norm = torch.nn.InstanceNorm3d(out_features, affine=True)
-        self.end_conv = SeparableConvolution(out_features, out_features, (3, 3, 1), (1, 1, 0), dim=3)
+        self.double = double
+        self.agent_dim = agent_dim
+        dim = 2 + agent_dim
+        norm = getattr(torch.nn, f'InstanceNorm{dim}d')
+        kernel = (3, 3) + ((1,) if agent_dim else ())
+        pad = (1, 1) + ((0,) if agent_dim else ())
+        stride = (stride, stride) + ((1,) if agent_dim else ())
+        self.init_norm = norm(in_features, affine=True) if init_norm else nothing
+        self.init_conv = SeparableConvolution(in_features, out_features, kernel, pad, stride=stride, dim=dim)
+        if double:
+            self.mid_norm = norm(out_features, affine=True)
+            self.end_conv = SeparableConvolution(out_features, out_features, kernel, pad, dim=dim)
+        else:
+            self.mid_norm = nothing
+            self.end_conv = nothing
         self.shortcut = torch.nn.Sequential()
-        if stride > 1:
-            self.shortcut.add_module("1", torch.nn.AvgPool3d((stride, stride, 1), padding=(1,1,0)))
+        if stride[0] > 1:
+            self.shortcut.add_module("1", getattr(torch.nn, f"MaxPool{dim}d")(kernel, stride, padding=pad))
         if in_features != out_features:
-            self.shortcut.add_module("2", torch.nn.Conv3d(in_features, out_features, 1))
+            self.shortcut.add_module("2", getattr(torch.nn, f"Conv{dim}d")(in_features, out_features, 1))
         self.message_box = int(out_features ** 0.5) if message_box is None else message_box
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         out = self.init_conv(fn_input if self.activate is None else mish(self.init_norm(fn_input)))
-        out = mish(self.mid_norm(out))
-        out: torch.Tensor = self.end_conv(out)
-        out[:, :self.message_box] = out[:, :self.message_box].mean(-1,
-                                                                   keepdim=True).expand(-1, -1, -1, -1,
-                                                                                        fn_input.size(-1))
+        if self.double:
+            out = self.end_conv(mish(self.mid_norm(out)))
+        if self.agent_dim and self.message_box > 0:
+            out[:, :self.message_box] = out[:, :self.message_box].mean(-1,
+                                                                       keepdim=True).expand(-1, -1, -1, -1,
+                                                                                            fn_input.size(-1))
         srt = self.shortcut(fn_input)
         out = out + srt
         return out
 
 
 class ConvNetwork(torch.nn.Module):
-    def __init__(self, state_size, action_size, hidden_size=15, depth=8, kernel_size=7, squeeze_heads=4, cat=True,
-                 debug=True, softmax=False):
+    def __init__(self, state_size, action_size, hidden_size=15, depth=8, kernel_size=7, squeeze_heads=4,
+                 decoder_depth=1, cat=True, debug=True, softmax=False):
         super(ConvNetwork, self).__init__()
         _ = state_size
         state_size = 2 * 21
@@ -99,9 +111,7 @@ class ConvNetwork(torch.nn.Module):
                                                    init_norm=bool(i))
                                         for i in range(depth)])
         self.init_norm = torch.nn.InstanceNorm1d(hidden_size, affine=True)
-        self.linear0 = torch.nn.Conv1d(hidden_size, hidden_size, 1, bias=False)
-        self.mid_norm = torch.nn.InstanceNorm1d(hidden_size, affine=True)
-        self.linear1 = torch.nn.Conv1d(hidden_size, action_size, 1)
+        self.linear = torch.nn.Conv1d(hidden_size, action_size, 1)
         self.softmax = softmax
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
@@ -109,7 +119,58 @@ class ConvNetwork(torch.nn.Module):
         for module in self.net:
             out = module(out)
         out = out.mean((2, 3))
-        out = self.linear1(mish(self.mid_norm(self.linear0(mish(self.init_norm(out))))))
+        out = self.linear(mish(self.init_norm(out)))
+        return torch.nn.functional.softmax(out, 1) if self.softmax else out
+
+    @torch.jit.export
+    def reset_cache(self):
+        pass
+
+
+class GlobalStateNetwork(torch.nn.Module):
+    def __init__(self, state_size, action_size, hidden_size=15, depth=8, kernel_size=7, squeeze_heads=4,
+                 decoder_depth=1 , cat=True, debug=True, softmax=False):
+        super(GlobalStateNetwork, self).__init__()
+        _ = state_size
+        _ = kernel_size
+        _ = squeeze_heads
+        _ = cat
+        _ = debug
+        global_state_size = 2 * 16
+        agent_state_size = 2 * 13
+
+        self.net = torch.nn.Sequential(*[BasicBlock(global_state_size if not i else hidden_size,
+                                                    hidden_size,
+                                                    2,
+                                                    init_norm=bool(i),
+                                                    message_box=0,
+                                                    double=False,
+                                                    agent_dim=False)
+                                         for i in range(depth)])
+        self.decoder = torch.nn.Sequential(*[layer
+                                             for i in range(decoder_depth - 1)
+                                             for layer in (torch.nn.Conv1d(hidden_size + (0 if i else agent_state_size),
+                                                                           hidden_size,
+                                                                           1,
+                                                                           bias=False),
+                                                           torch.nn.InstanceNorm1d(hidden_size, affine=True),
+                                                           Mish())],
+                                           torch.nn.Conv1d(hidden_size, action_size, 1))
+        self.softmax = softmax
+
+        self.register_buffer("base_zero", torch.zeros(1))
+        self.encoding_cache = self.base_zero
+
+    @torch.jit.export
+    def reset_cache(self):
+        self.encoding_cache = self.base_zero
+
+    def forward(self, state, rail) -> torch.Tensor:
+        if torch.equal(self.encoding_cache, self.base_zero):
+            self.encoding_cache = self.net(rail)
+            self.encoding_cache = self.encoding_cache.mean((2, 3), keepdim=True).squeeze(-1)
+        inp = torch.cat([self.encoding_cache.clone().expand(-1, -1, state.size(-1)), state], 1)
+        out = self.decoder(inp)
         return torch.nn.functional.softmax(out, 1) if self.softmax else out
 
 
@@ -128,7 +189,7 @@ class Residual(torch.nn.Module):
     def __init__(self, features):
         super(Residual, self).__init__()
         self.norm = torch.nn.BatchNorm1d(features)
-        self.conv = torch.nn.Conv1d(features, 2 * features)
+        self.conv = torch.nn.Conv1d(features, 2 * features, 1)
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         out, exc = self.conv(mish(self.norm(fn_input))).chunk(2, 1)
@@ -138,18 +199,25 @@ class Residual(torch.nn.Module):
         return fn_input + out
 
 
-def QNetwork(state_size, action_size, hidden_factor=16, depth=4, kernel_size=7, squeeze_heads=4, cat=False,
-             debug=True):
-    model = torch.nn.Sequential(torch.nn.Conv1d(2 * state_size, 11 * hidden_factor, 1, groups=11, bias=False),
-                                Residual(11 * hidden_factor),
-                                torch.nn.BatchNorm1d(11 * hidden_factor),
-                                Mish(),
-                                torch.nn.Conv1d(11 * hidden_factor, action_size, 1))
-    print(model)
+class QNetwork(torch.nn.Sequential):
+    def __init__(self, state_size, action_size, hidden_factor=16, depth=4, kernel_size=7, squeeze_heads=4,
+                 decoder_depth=1, cat=False, debug=True):
+        super(QNetwork, self).__init__()
+        _ = depth
+        _ = kernel_size
+        _ = squeeze_heads
+        _ = cat
+        _ = debug
+        _ = decoder_depth
+        self.model = torch.nn.Sequential(torch.nn.Conv1d(2 * state_size, 11 * hidden_factor, 1, groups=11, bias=False),
+                                         Residual(11 * hidden_factor),
+                                         torch.nn.BatchNorm1d(11 * hidden_factor),
+                                         Mish(),
+                                         torch.nn.Conv1d(11 * hidden_factor, action_size, 1))
 
-    model.apply(init)
-    try:
-        model = torch.jit.script(model)
-    except TypeError:
+    @torch.jit.export
+    def reset_cache(self):
         pass
-    return model
+
+    def forward(self, *args):
+        return self.model(*args)

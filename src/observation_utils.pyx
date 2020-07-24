@@ -32,6 +32,9 @@ cpdef int get_direction(int orientation, int action):
     else:
         return orientation
 
+cpdef set_array(tuple data, int width, cnp.ndarray arr, int base_index, int start_index):
+    arr[start_index:start_index + 4, base_index] = data + (data[0] / width, data[1] / width)
+
 cdef class RailNode:
     cdef public dict edges
     cdef public tuple position
@@ -74,15 +77,18 @@ class GlobalObsForRailEnv(ObservationBuilder):
     def reset(self):
         if self._custom_rail_obs is None:
             self._custom_rail_obs = np.zeros((1, self.env.height + 2 * self.size, self.env.width + 2 * self.size, 16))
-
-        self._custom_rail_obs[0, self.size:-self.size, self.size:-self.size] = np.array([[[[1 if digit == '1' else 0
-                                                                                            for digit in
-                                                                                            f'{self.env.rail.get_full_transitions(i, j):016b}']
-                                                                                           for j in
-                                                                                           range(self.env.width)]
-                                                                                          for i in
-                                                                                          range(self.env.height)]],
-                                                                                        dtype=self.data_type)
+        cdef cnp.ndarray out = np.array([[[[1 if digit == '1' else 0
+                                            for digit in
+                                            f'{self.env.rail.get_full_transitions(i, j):016b}']
+                                           for j in
+                                           range(self.env.width)]
+                                          for i in
+                                          range(self.env.height)]],
+                                        dtype=self.data_type)
+        if self.size > 0:
+            self._custom_rail_obs[0, self.size:-self.size, self.size:-self.size] = out
+        else:
+            self._custom_rail_obs = out
 
     def get_many(self, list trash):
         cdef int agent_count = len(self.env.agents)
@@ -183,6 +189,39 @@ class LocalObsForRailEnv(GlobalObsForRailEnv):
         if self.return_array:
             return obs_agents_state
         return dict(enumerate(obs_agents_state))
+
+
+class GlobalStateObs(GlobalObsForRailEnv):
+    def __init__(self, return_array=True):
+        super(GlobalStateObs, self).__init__(return_array=return_array)
+    def get_many(self, list trash):
+        cdef int agent_count = len(self.env.agents)
+        cdef cnp.ndarray obs_agents_state = np.zeros((13, agent_count), dtype=np.float32)
+        cdef int i, agent_id
+        cdef tuple agent_virtual_position
+
+        for agent_id, agent in enumerate(self.env.agents):
+            if agent.status == RailAgentStatus.READY_TO_DEPART:
+                agent_virtual_position = agent.initial_position
+            elif agent.status == RailAgentStatus.ACTIVE:
+                agent_virtual_position = agent.position
+            elif agent.status == RailAgentStatus.DONE:
+                agent_virtual_position = agent.target
+            else:  # Done+Removed
+                continue
+
+            obs_agents_state[0, agent_id] = agent.direction
+            obs_agents_state[1, agent_id] = agent.malfunction_data['malfunction']
+            obs_agents_state[2, agent_id] = agent.speed_data['speed']
+            obs_agents_state[3, agent_id] = agent.status
+            obs_agents_state[4, agent_id] = agent.moving
+            set_array(agent_virtual_position, self.env.width, obs_agents_state, agent_id, 5)
+            set_array(agent.target, self.env.width, obs_agents_state, agent_id, 9)
+
+        if self.return_array:
+            return obs_agents_state, self._custom_rail_obs[0]
+        return dict(enumerate(obs_agents_state))
+
 
 class TreeObservation(ObservationBuilder):
     def __init__(self, max_depth):
