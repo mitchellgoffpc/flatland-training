@@ -128,18 +128,23 @@ class ConvNetwork(torch.nn.Module):
 
 
 class DecoderBlock(torch.nn.Module):
-    def __init__(self, features, message_box=None):
+    def __init__(self, features, message_box=None, init_norm=True):
         super(DecoderBlock, self).__init__()
-        self.norm = torch.nn.InstanceNorm1d(features, affine=True)
+        self.init_norm = init_norm
+        self.norm = torch.nn.InstanceNorm1d(features, affine=True) if init_norm else nothing
         self.conv = torch.nn.Conv1d(features, features, 1, bias=False)
         self.message_box = int(features ** 0.5) if message_box is None else message_box
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
-        out = self.norm(fn_input)
-        out = mish(out)
+        if self.init_norm:
+            out = self.norm(fn_input)
+            out = mish(out)
+        else:
+            out = fn_input
         out = self.conv(out)
         if self.message_box > 0:
-            out[:, :self.message_box] = out[:, :self.message_box].mean(-1, keepdim=True).expand(-1, -1, fn_input.size(-1))
+            out[:, :self.message_box] = out[:, :self.message_box].mean(-1, keepdim=True).expand(-1, -1,
+                                                                                                fn_input.size(-1))
         return out + fn_input
 
 
@@ -156,15 +161,15 @@ class GlobalStateNetwork(torch.nn.Module):
         agent_state_size = 2 * 13
 
         self.net = torch.nn.Sequential(*[BasicBlock(global_state_size if not i else hidden_size,
-                                                    hidden_size,
+                                                    hidden_size - agent_state_size * (i == depth - 1),
                                                     2,
                                                     init_norm=bool(i),
                                                     message_box=0,
                                                     double=False,
                                                     agent_dim=False)
                                          for i in range(depth)])
-        self.decoder = torch.nn.Sequential(torch.nn.Conv1d(hidden_size + agent_state_size, hidden_size, 1, bias=False),
-                                           *[DecoderBlock(hidden_size, 0) for _ in range(decoder_depth)],
+        self.mid_norm = torch.nn.InstanceNorm1d(hidden_size - agent_state_size, affine=True)
+        self.decoder = torch.nn.Sequential(*[DecoderBlock(hidden_size, 0, bool(i)) for i in range(decoder_depth)],
                                            torch.nn.InstanceNorm1d(hidden_size, affine=True),
                                            torch.nn.Conv1d(hidden_size, action_size, 1))
         self.softmax = softmax
@@ -177,12 +182,11 @@ class GlobalStateNetwork(torch.nn.Module):
         self.encoding_cache = self.base_zero
 
     def forward(self, state, rail) -> torch.Tensor:
-        if torch.equal(self.encoding_cache, self.base_zero):
-            inp = self.net(rail)
-            inp = inp.mean((2, 3), keepdim=True).squeeze(-1)
-            self.encoding_cache = inp
-        else:
-            inp = self.encoding_cache
+        inp = self.net(rail)
+        inp = inp.mean((2, 3), keepdim=True).squeeze(-1)
+        inp = mish(inp)
+        inp = self.mid_norm(inp)
+        self.encoding_cache = inp
         inp = torch.cat([inp.expand(-1, -1, state.size(-1)), state], 1)
         out = self.decoder(inp)
         return torch.nn.functional.softmax(out, 1) if self.softmax else out
