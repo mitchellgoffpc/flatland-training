@@ -128,12 +128,13 @@ class ConvNetwork(torch.nn.Module):
 
 
 class DecoderBlock(torch.nn.Module):
-    def __init__(self, features, message_box=None, init_norm=True):
+    def __init__(self, in_features, out_features, message_box=None, init_norm=True):
         super(DecoderBlock, self).__init__()
         self.init_norm = init_norm
-        self.norm = torch.nn.InstanceNorm1d(features, affine=True) if init_norm else nothing
-        self.conv = torch.nn.Conv1d(features, features, 1, bias=False)
-        self.message_box = int(features ** 0.5) if message_box is None else message_box
+        self.residual = in_features == out_features
+        self.norm = torch.nn.InstanceNorm1d(in_features, affine=True) if init_norm else nothing
+        self.conv = torch.nn.Conv1d(in_features, out_features, 1, bias=False)
+        self.message_box = int(out_features ** 0.5) if message_box is None else message_box
 
     def forward(self, fn_input: torch.Tensor) -> torch.Tensor:
         if self.init_norm:
@@ -145,12 +146,23 @@ class DecoderBlock(torch.nn.Module):
         if self.message_box > 0:
             out[:, :self.message_box] = out[:, :self.message_box].mean(-1, keepdim=True).expand(-1, -1,
                                                                                                 fn_input.size(-1))
-        return out + fn_input
+        if self.residual:
+            return out + fn_input
+        return out
+
+
+@torch.jit.script
+def attention(tensor: torch.Tensor):
+    query, key, value = tensor.chunk(3, 1)
+    query = query.transpose(1, 2)  # B, F, S -> B, S, F
+    key = torch.bmm(query, key).softmax(1)
+    value = torch.bmm(value, key)
+    return value
 
 
 class GlobalStateNetwork(torch.nn.Module):
     def __init__(self, state_size, action_size, hidden_size=15, depth=8, kernel_size=7, squeeze_heads=4,
-                 decoder_depth=1, cat=True, debug=True, softmax=False):
+                 decoder_depth=1, cat=True, debug=True, softmax=False, memory_size=4):
         super(GlobalStateNetwork, self).__init__()
         _ = state_size
         _ = kernel_size
@@ -160,35 +172,38 @@ class GlobalStateNetwork(torch.nn.Module):
         global_state_size = 2 * 16
         agent_state_size = 2 * 13
 
+        self.memory_size = memory_size
+
         self.net = torch.nn.Sequential(*[BasicBlock(global_state_size if not i else hidden_size,
-                                                    hidden_size - agent_state_size * (i == depth - 1),
+                                                    hidden_size + (i == depth - 1) * hidden_size * 2,
                                                     2,
                                                     init_norm=bool(i),
                                                     message_box=0,
                                                     double=False,
                                                     agent_dim=False)
                                          for i in range(depth)])
-        self.mid_norm = torch.nn.InstanceNorm1d(hidden_size - agent_state_size, affine=True)
-        self.decoder = torch.nn.Sequential(*[DecoderBlock(hidden_size, 0, bool(i)) for i in range(decoder_depth)],
-                                           torch.nn.InstanceNorm1d(hidden_size, affine=True),
-                                           torch.nn.Conv1d(hidden_size, action_size, 1))
+        self.decoder_input = DecoderBlock(agent_state_size, 3 * hidden_size, 0, False)
+        self.decoder = torch.nn.ModuleList([DecoderBlock(hidden_size, 3 * hidden_size, 0, True)
+                                            for _ in range(1, decoder_depth)])
+        self.end_norm = torch.nn.InstanceNorm1d(hidden_size, affine=True)
+        self.end_conv = torch.nn.Conv1d(hidden_size, action_size, 1)
         self.softmax = softmax
 
-        self.register_buffer("base_zero", torch.zeros(1))
-        self.encoding_cache = self.base_zero
+        self.memory_tensor = torch.nn.Parameter(torch.randn(1, 3 * hidden_size, memory_size))
 
     @torch.jit.export
     def reset_cache(self):
-        self.encoding_cache = self.base_zero
+        pass
 
     def forward(self, state, rail) -> torch.Tensor:
         inp = self.net(rail)
         inp = inp.mean((2, 3), keepdim=True).squeeze(-1)
-        inp = mish(inp)
-        inp = self.mid_norm(inp)
-        self.encoding_cache = inp
-        inp = torch.cat([inp.expand(-1, -1, state.size(-1)), state], 1)
-        out = self.decoder(inp)
+        state = torch.cat([self.decoder_input(state) + inp, self.memory_tensor.expand(inp.size(0), -1, -1)], 2)
+        state = attention(state)
+        for block in self.decoder:
+            state = attention(block(state))
+        state = state[:, :, :-self.memory_size]
+        out = self.end_conv(self.end_norm(state))
         return torch.nn.functional.softmax(out, 1) if self.softmax else out
 
 
