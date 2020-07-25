@@ -105,10 +105,10 @@ class Agent:
 
         if len(self.stack) >= UPDATE_EVERY:
             action = torch.tensor(self.stack[1]).flatten(0, 1).to(device)
-            reward = torch.tensor([[[1 if ad
-                                     else (collision_reward if c else step_reward) for ad, c in zip(ad_batch, c_batch)]
-                                    for ad_batch, c_batch in zip(ad_step, c_step)]
-                                   for ad_step, c_step in zip(self.stack[2], self.stack[3])]).flatten(0, 1).to(device)
+            agent_done = np.array(self.stack[2])
+            collision = np.array(self.stack[3])
+            reward = np.where(agent_done, 1, np.where(collision, collision_reward, step_reward))
+            reward = torch.tensor(reward, device=device, dtype=torch.float).flatten(0, 1)
             state = self.stack[0]
             if isinstance(state[0], tuple):
                 state = zip(*state)
