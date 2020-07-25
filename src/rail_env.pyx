@@ -1,9 +1,14 @@
+#!python
+#cython: boundscheck=False
+#cython: initializedcheck=False
+#cython: nonecheck=False
+#cython: wraparound=False
 """
 Definition of the RailEnv environment.
 """
 import random
 # TODO:  _ this is a global method --> utils or remove later
-from typing import List, NamedTuple, Optional, Dict
+from typing import List, NamedTuple, Dict
 
 import msgpack_numpy as m
 import numpy as np
@@ -12,7 +17,6 @@ from flatland.core.env_observation_builder import ObservationBuilder
 from flatland.core.grid.grid4 import Grid4Transitions
 from flatland.core.grid.grid4_utils import get_new_position
 from flatland.core.grid.grid_utils import IntVector2D
-from flatland.core.transition_map import GridTransitionMap
 # Need to use circular imports for persistence.
 from flatland.envs import malfunction_generators as mal_gen
 from flatland.envs import persistence
@@ -174,7 +178,7 @@ class RailEnv(Environment):
             schedule_generator = sched_gen.random_schedule_generator()
         self.schedule_generator = schedule_generator
 
-        self.rail: Optional[GridTransitionMap] = None
+        self.rail = None
         self.width = width
         self.height = height
 
@@ -185,7 +189,7 @@ class RailEnv(Environment):
         self.obs_builder = obs_builder_object
         self.obs_builder.set_env(self)
 
-        self._max_episode_steps: Optional[int] = None
+        self._max_episode_steps = 0
         self._elapsed_steps = 0
 
         self.dones = dict.fromkeys(list(range(number_of_agents)) + ["__all__"], False)
@@ -195,7 +199,7 @@ class RailEnv(Environment):
         self.dev_obs_dict = {}
         self.dev_pred_dict = {}
 
-        self.agents: List[EnvAgent] = []
+        self.agents = []
         self.number_of_agents = number_of_agents
         self.num_resets = 0
         self.distance_map = DistanceMap(self.agents, self.height, self.width)
@@ -209,7 +213,7 @@ class RailEnv(Environment):
         self.valid_positions = None
 
         # global numpy array of agents position, True means that there is an agent at that cell
-        self.agent_positions: np.ndarray = np.full((height, width), False)
+        self.agent_positions = np.full((height, width), False)
 
         # save episode timesteps ie agent positions, orientations.  (not yet actions / observations)
         self.record_steps = record_steps  # whether to save timesteps
@@ -456,6 +460,7 @@ class RailEnv(Environment):
 
         return self._get_observations(), self.rewards_dict, self.dones, info_dict
 
+
     def _step_agent(self, int i_agent, int action):
         """
         Performs a step and step, start and stop penalty on a single agent in the following sub steps:
@@ -536,7 +541,7 @@ class RailEnv(Environment):
                 else:
                     # But, if the chosen invalid action was LEFT/RIGHT, and the agent is moving,
                     # try to keep moving forward!
-                    if (action == MOVE_LEFT or action == MOVE_RIGHT):
+                    if action in (MOVE_LEFT, MOVE_RIGHT):
                         _, new_cell_valid, new_direction, new_position, transition_valid = \
                             self._check_action_on_agent(MOVE_FORWARD, agent)
 

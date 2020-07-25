@@ -1,3 +1,10 @@
+#!python
+#cython: boundscheck=False
+#cython: initializedcheck=False
+#cython: nonecheck=False
+#cython: wraparound=False
+#cython: cdivision=True
+
 from collections import defaultdict
 
 cimport numpy as cnp
@@ -26,7 +33,7 @@ cpdef str get_action(int orientation, int direction):
 
 cpdef int get_direction(int orientation, int action):
     if action == 1:
-        return (orientation + 4 - 1) % 4
+        return (orientation - 1) % 4
     elif action == 3:
         return (orientation + 1) % 4
     else:
@@ -86,7 +93,7 @@ class GlobalObsForRailEnv(ObservationBuilder):
                                           range(self.env.height)]],
                                         dtype=self.data_type)
         if self.size > 0:
-            self._custom_rail_obs[0, self.size:-self.size, self.size:-self.size] = out
+            self._custom_rail_obs[0, self.size:self.env.height - self.size, self.size:self.env.width - self.size] = out
         else:
             self._custom_rail_obs = out
 
@@ -173,8 +180,6 @@ class LocalObsForRailEnv(GlobalObsForRailEnv):
 
                 # second to fourth channel only if in the grid
                 if other_agent.position is not None:
-                    pos = (agent_id,) + other_agent.position
-                    # second channel only for other agents
                     if i != agent_id:
                         obs_agents_state[agent_id, :, :, 1] = other_agent.direction
                     obs_agents_state[agent_id, :, :, 2] = other_agent.malfunction_data['malfunction']
@@ -197,7 +202,7 @@ class GlobalStateObs(GlobalObsForRailEnv):
     def get_many(self, list trash):
         cdef int agent_count = len(self.env.agents)
         cdef cnp.ndarray obs_agents_state = np.zeros((13, agent_count), dtype=np.float32)
-        cdef int i, agent_id
+        cdef int agent_id
         cdef tuple agent_virtual_position
 
         for agent_id, agent in enumerate(self.env.agents):
@@ -437,10 +442,11 @@ class TreeObservation(ObservationBuilder):
 
         cdef list path = list()
 
+
         # Skip ahead until we get to a major node, logging any agents on the tracks along the way
         while True:
             path = self.edge_paths.get((node.position, direction), [])
-            orientation = path[-1][-1] if path else direction
+            orientation = path[len(path) - 1][len(path[len(path) - 1]) - 1] if path else direction
             dist = total_distance + edge_length
             key = (*node.position, direction)
             next_key = (*next_node.position, orientation)
@@ -556,28 +562,28 @@ cpdef create_tree_features(node, int max_depth, list data):
         if node == negative_infinity or node == positive_infinity or node is None:
             data.append(ZERO_NODE.expand((4 ** (max_depth - current_depth + 1) - 1) // 3, -1))
         else:
-            data.append(torch.FloatTensor(node[:-2]).view(1, 11))
+            data.append(torch.FloatTensor(node[:11]).unsqueeze(0))
             if node.childs:
                 for direction in ACTIONS:
                     nodes.append((node.childs[direction], current_depth + 1))
 
 # Normalize a tree observation
 cpdef normalize_observation(tuple observations, int max_depth, shared_tensor, int starting_index):
-    cdef list data = []
+    cdef list data = [[[] for _ in range(len(observations[0]))] for _ in range(len(observations))]
     cdef int i = 0
+    cdef int sub = 0
     for i, tree in enumerate(observations, 1):
         if tree is None:
             break
-        data.append([])
         if isinstance(tree, dict):
             tree = tree.values()
-        for t in tree:
-            data[-1].append([])
+        for sub, t in enumerate(tree):
             if isinstance(t, dict):
                 for d in t.values():
-                    create_tree_features(d, max_depth, data[-1][-1])
+                    create_tree_features(d, max_depth, data[i][sub])
             else:
-                create_tree_features(t, max_depth, data[-1][-1])
+                create_tree_features(t, max_depth, data[i][sub])
+
 
     shared_tensor[starting_index:starting_index + i] = torch.stack([torch.stack([torch.cat(dat, 0)
                                                                                  for dat in tree if dat != []], -1)
