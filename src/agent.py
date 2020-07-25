@@ -11,10 +11,10 @@ except:
     from model import QNetwork, ConvNetwork, init, GlobalStateNetwork
 import os
 
-BATCH_SIZE = 256
+BATCH_SIZE = 4
 CLIP_FACTOR = 0.2
-LR = 1e-4
-UPDATE_EVERY = 1
+LR = 1e-5
+UPDATE_EVERY = 32
 CUDA = True
 
 device = torch.device("cuda:0" if CUDA and torch.cuda.is_available() else "cpu")
@@ -99,7 +99,7 @@ class Agent:
                                or not k.startswith('_')] for a in agent_done])
         self.stack[3].append(collision)
 
-        if len(self.stack) >= UPDATE_EVERY:
+        if len(self.stack[0]) >= UPDATE_EVERY:
             action = torch.tensor(self.stack[1]).flatten(0, 1).to(device)
             agent_done = np.array(self.stack[2])
             collision = np.array(self.stack[3])
