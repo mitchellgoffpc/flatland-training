@@ -11,14 +11,10 @@ except:
     from model import QNetwork, ConvNetwork, init, GlobalStateNetwork
 import os
 
-BUFFER_SIZE = 500_000
 BATCH_SIZE = 256
-GAMMA = 0.998
-TAU = 1e-3
 CLIP_FACTOR = 0.2
 LR = 1e-4
 UPDATE_EVERY = 1
-DOUBLE_DQN = False
 CUDA = True
 
 device = torch.device("cuda:0" if CUDA and torch.cuda.is_available() else "cpu")
