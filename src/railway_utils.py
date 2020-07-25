@@ -94,13 +94,11 @@ class ScheduleGenerator:
 def load_precomputed_railways(project_root, start_index, big=False):
     prefix = os.path.join(project_root, 'railroads')
     if big:
-        suffix = f'_35_6.pkl'
+        suffix = f'_35_6.pkl'  # base=1.1
     else:
-        suffix = f'_50.pkl'
+        suffix = f'_35_4.pkl'  # base=1.04
     rail = Generator(os.path.join(prefix, 'rail_networks' + suffix), start_index)
     sched = Generator(os.path.join(prefix, 'schedules' + suffix), start_index)
-    if not big:
-        sched, rail = rail, sched
     print(f"Working on {len(rail)} tracks")
     return rail, sched
 
