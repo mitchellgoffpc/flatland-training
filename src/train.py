@@ -3,6 +3,7 @@ import copy
 import time
 from itertools import zip_longest
 from pathlib import Path
+
 import numpy as np
 import torch
 from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
@@ -19,14 +20,14 @@ negative_infinity = -positive_infinity
 
 try:
     from .rail_env import RailEnv
-    from .agent import Agent as DQN_Agent, device, BATCH_SIZE
+    from .agent import Agent as DQN_Agent, device, BATCH_SIZE, UPDATE_EVERY
     from .normalize_output_data import wrap
     from .observation_utils import normalize_observation, TreeObservation, GlobalObsForRailEnv, LocalObsForRailEnv, \
         GlobalStateObs
     from .railway_utils import load_precomputed_railways, create_random_railways
 except:
     from rail_env import RailEnv
-    from agent import Agent as DQN_Agent, device, BATCH_SIZE
+    from agent import Agent as DQN_Agent, device, BATCH_SIZE, UPDATE_EVERY
     from normalize_output_data import wrap
     from observation_utils import normalize_observation, TreeObservation, GlobalObsForRailEnv, LocalObsForRailEnv, \
         GlobalStateObs
@@ -130,7 +131,7 @@ if model_type in (1, 2):
         return any(own_agent.position == agent.position
                    for agent_id, agent in enumerate(environments[i].agents)
                    if agent_id != a)
-else: #model_type == 0
+else:  # model_type == 0
     def is_collision(a, i):
         if obs[i][a] is None: return False
         is_junction = not isinstance(obs[i][a].childs['L'], float) or not isinstance(obs[i][a].childs['R'], float)
@@ -164,8 +165,39 @@ else:
         normalize_observation(observation, flags.tree_depth, target_tensor, 0)
         wrap(target_tensor)
 
+
 def as_tensor(array_list):
     return torch.as_tensor(np.stack(array_list, 0), dtype=torch.float, device=device)
+
+
+def make_tensor(current, old):
+    if model_type == 1:
+        tensor = (torch.cat([old[0], current[0]], -1),)
+    elif model_type == 0:
+        tensor = (torch.cat([old[0].flatten(1, 2), current[0].flatten(1, 2)], 1),)
+    else:  # model_type == 2
+        tensor = (torch.cat((old[0], current[0]), 1), torch.cat((old[1], current[1]), -1))
+        tensor[1].transpose_(1, -1)
+    tensor = tuple(t.to(device) for t in tensor)
+    return tensor
+
+
+def clone(tensor_tuple):
+    return tuple(t.clone().detach().requires_grad_(t.requires_grad) for t in tensor_tuple)
+
+
+def get_observation_tensor(observation, prev_tensor=None):
+    buffer = None if prev_tensor is None else clone(prev_tensor)
+    if model_type == 1:
+        obs_tensor = as_tensor(observation)
+    elif model_type == 0:
+        obs_tensor = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
+        normalize(observation, obs_tensor)
+    else:  # model_type == 2
+        rail, obs = zip(*observation)
+        obs_tensor = as_tensor(rail), as_tensor(obs)
+    return obs_tensor, buffer
+
 
 episode = 0
 POOL = multiprocessing.Pool()
@@ -177,45 +209,30 @@ POOL = multiprocessing.Pool()
 
 # Main training loop
 episode = start
+running_stats = {'score': 0, 'steps': 0, 'collisions': 0, 'done': 0, 'finished': 0}
+batch_start = time.time()
 while True:
     episode += 1
     agent.reset()
     obs, info = zip(*[env.reset() for env in environments])
     # env_renderer = RenderTool(environments[0], gl="PILSVG", screen_width=1000, screen_height=1000, agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX)
     # env_renderer.reset()
-    episode_start = time.time()
     score, collision = 0, False
     agent_count = len(environments[0].agents)
-    if model_type == 1:
-        agent_obs = as_tensor(obs)
-        agent_obs_buffer = agent_obs.clone()
-    elif model_type == 0:
-        agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
-        normalize(obs, agent_obs)
-        agent_obs_buffer = agent_obs.clone()
-    else:  # model_type == 2
-        rail, obs = zip(*obs)
-        agent_obs = as_tensor(rail), as_tensor(obs)
-        agent_obs_buffer = agent_obs[0].clone(), agent_obs[1].clone()
 
     agent_action_buffer = [[2] * agent_count for _ in range(BATCH_SIZE)]
-
+    agent_obs, _ = get_observation_tensor(obs)
+    agent_obs_buffer = clone(agent_obs)
+    input_tensor = make_tensor(agent_obs, agent_obs_buffer)
     # Run an episode
     city_count = (env.width * env.height) // 300
     max_steps = int(8 * (env.width + env.height + agent_count / city_count)) - 10
     # -10 = have some distance to the "real" max steps
     done = [[False]]
     _done = [[False]]
+    step = 0
     for step in range(max_steps):
         done = _done
-        if model_type == 1:
-            input_tensor = torch.cat([agent_obs_buffer, agent_obs], -1)
-        elif model_type == 0:
-            input_tensor = torch.cat([agent_obs_buffer.flatten(1, 2), agent_obs.flatten(1, 2)], 1)
-        else:  # model_type == 2
-            input_tensor = (torch.cat((agent_obs_buffer[0], agent_obs[0]), 1),
-                            torch.cat((agent_obs_buffer[1], agent_obs[1]), -1))
-            input_tensor[1].transpose_(1, -1)
 
         ret_action = agent.multi_act(input_tensor)
         action_dict = [dict(enumerate(act_list)) for act_list in ret_action]
@@ -228,29 +245,22 @@ while True:
         all_done = (step == (max_steps - 1)) or all(d['__all__'] for d in _done)
         collision = [[is_collision(a, i) for a in range(agent_count)] for i in range(BATCH_SIZE)]
         # Update replay buffer and train agent
+        agent_obs, agent_obs_buffer = get_observation_tensor(obs, agent_obs)
+        next_input = make_tensor(agent_obs, agent_obs_buffer)
+
         if flags.train:
             agent.step(input_tensor,
                        agent_action_buffer,
                        _done,
                        collision,
+                       next_input,
                        flags.step_reward,
                        flags.collision_reward)
             agent_action_buffer = [[act[i] for i in range(agent_count)] for act in action_dict]
 
         if all_done:
             break
-
-        if model_type == 1:
-            agent_obs_buffer = agent_obs.clone()
-            agent_obs = as_tensor(obs)
-        elif model_type == 0:
-            agent_obs_buffer = agent_obs.clone()
-            agent_obs = torch.zeros((BATCH_SIZE, state_size // 11, 11, agent_count))
-            normalize(obs, agent_obs)
-        else:  # model_type == 2
-            rail, obs = zip(*obs)
-            agent_obs_buffer = agent_obs[0].clone(), agent_obs[1].clone()
-            agent_obs = as_tensor(rail), as_tensor(obs)
+        input_tensor = next_input
 
         # Render
         # if flags.render_interval and episode % flags.render_interval == 0:
@@ -260,15 +270,23 @@ while True:
         #    render()
         #     print("Collisions detected by agent(s)", ', '.join(str(a) for a in obs if is_collision(a)))
         #     break
+    running_stats['score'] += score / max_steps
+    running_stats['steps'] += step
+    running_stats['collisions'] += sum(i for c in collision for i in c) / agent_count
+    running_stats['done'] += sum(d[i] for d in done for i in range(agent_count)) / agent_count
+    running_stats['finished'] += sum(d["__all__"] for d in done)
 
-    print(f'\rBatch{episode:>3} - Episode{BATCH_SIZE * episode:>5} - Agents:{agent_count:>3}'
-          f' | Score: {score / max_steps:.4f}'
-          f' | Steps: {step:4.0f}'
-          f' | Collisions: {100 * sum(i for c in collision for i in c) / (BATCH_SIZE * agent_count):6.2f}%'
-          f' | Done: {100 * sum(d[i] for d in done for i in range(agent_count)) / (BATCH_SIZE * agent_count):6.2f}%'
-          f' | Finished: {100 * sum(d["__all__"] for d in done) / BATCH_SIZE:6.2f}%'
-          f' | Took: {time.time() - episode_start:5.0f}s', end='')
+    if episode % UPDATE_EVERY == 0:
+        running_stats = {k: v / UPDATE_EVERY for k, v in running_stats.items()}
+        print(f'\rBatch{episode:>3} - Episode{BATCH_SIZE * episode:>5} - Agents:{agent_count:>3}'
+              f' | Score: {running_stats["score"]:.4f}'
+              f' | Steps: {running_stats["steps"]:4.0f}'
+              f' | Collisions: {100 * running_stats["collisions"] / BATCH_SIZE:6.2f}%'
+              f' | Done: {100 * running_stats["done"] / BATCH_SIZE:6.2f}%'
+              f' | Finished: {100 * running_stats["finished"] / BATCH_SIZE:6.2f}%'
+              f' | Took: {time.time() - batch_start:5.0f}s')
+        running_stats = {k: 0 for k in running_stats.keys()}
+        batch_start = time.time()
 
-    print("")
 #    if flags.train:
 #        agent.save(project_root / 'checkpoints', episode)
