@@ -11,14 +11,15 @@ except:
     from model import QNetwork, ConvNetwork, init, GlobalStateNetwork
 import os
 
-BATCH_SIZE = 256
+BATCH_SIZE = 64
 CLIP_FACTOR = 0.2
 LR = 1e-4
 UPDATE_EVERY = 1
 CUDA = True
 MINI_BACKWARD = False
-DQN = True
+DQN = False
 DQN_PARAMS = {'tau': 1e-3, 'gamma': 0.998}
+EPOCHS = 16
 
 device = torch.device("cuda:0" if CUDA and torch.cuda.is_available() else "cpu")
 
@@ -76,6 +77,7 @@ class Agent:
         self.stack = [[] for _ in range(6)]
         self.t_step = 0
         self.idx = 1
+        self.tensor_stack = []
 
     def reset(self):
         self.policy.reset_cache()
@@ -88,7 +90,7 @@ class Agent:
         return action_values.argmax(1).detach().cpu().numpy()
 
     def step(self, state, action, agent_done, collision, next_state, step_reward=0, collision_reward=-2):
-        agent_count = len(agent_done[0])-1
+        agent_count = len(agent_done[0]) - 1
         self.stack[0].append(state)
         self.stack[1].append(action)
         self.stack[2].append([[done[idx] for idx in range(agent_count)] for done in agent_done])
@@ -96,40 +98,43 @@ class Agent:
         self.stack[4].append(next_state)
 
         if MINI_BACKWARD or len(self.stack[0]) >= UPDATE_EVERY:
-            action = torch.tensor(self.stack[1]).flatten(0, 1).to(device)
+            action = torch.tensor(self.stack[1]).flatten(0, 1).to(device).unsqueeze_(1)
             agent_done = np.array(self.stack[2])
             collision = np.array(self.stack[3])
             reward = np.where(agent_done, 1, np.where(collision, collision_reward, step_reward))
-            reward = torch.tensor(reward, device=device, dtype=torch.float).flatten(0, 1)
+            reward = torch.tensor(reward, device=device, dtype=torch.float).flatten(0, 1).unsqueeze_(1)
             state = tuple(torch.cat(st, 0) for st in zip(*self.stack[0]))
             next_state = tuple(torch.cat(st, 0) for st in zip(*self.stack[4]))
-            agent_done = torch.as_tensor(agent_done, device=device, dtype=torch.int8)
+            agent_done = torch.as_tensor(agent_done, device=device, dtype=torch.int8).flatten(0, 1).unsqueeze_(1)
             self.stack = [[] for _ in range(6)]
-            self.learn(state, action, reward, next_state, agent_done)
+            self.tensor_stack.append((state, action, reward, next_state, agent_done))
+            if len(self.tensor_stack) >= EPOCHS:
+                tensor_stack = (torch.cat(t, 0) if isinstance(t[0], torch.Tensor)
+                                else tuple(torch.cat(sub_t, 0) for sub_t in zip(*t))
+                                for t in zip(*self.tensor_stack))
+                del self.tensor_stack[0]
+                self.learn(*tensor_stack)
 
     def learn(self, states, actions, rewards, next_states, done):
         if MINI_BACKWARD:
             self.idx = (self.idx + 1) % UPDATE_EVERY
 
         self.policy.train()
-        actions.unsqueeze_(1)
 
         if DQN:
             expected = self.policy(*states).gather(1, actions)
             best_action = self.policy(*next_states).argmax(1)
             targets_next = self.old_policy(*next_states).gather(1, best_action.unsqueeze(1))
             targets = rewards + DQN_PARAMS['gamma'] * targets_next * (1 - done)
-            loss = (expected - targets).square().max(0)[0].mean()
+            loss = (expected - targets).square().max(0)[0].sum()
         else:
             with torch.no_grad():
                 states_clone = tuple(st.clone().detach().requires_grad_(False) for st in states)
-                old_responsible_outputs = self.old_policy(*states_clone).gather(1, actions)
-            old_responsible_outputs.detach_()
+                old_responsible_outputs = self.old_policy(*states_clone).gather(1, actions).detach_()
             responsible_outputs = self.policy(*states).gather(1, actions)
             ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
-            ratio.squeeze_(1)
             clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
-            loss = torch.min(ratio * rewards, clamped_ratio * rewards).sum(-1).max(0)[0].mean().neg()
+            loss = torch.min(ratio * rewards, clamped_ratio * rewards).max(0)[0].sum().neg()
 
         if MINI_BACKWARD:
             loss = loss / UPDATE_EVERY
@@ -145,7 +150,6 @@ class Agent:
                 for target_param, local_param in zip(self.old_policy.parameters(), self.policy.parameters()):
                     target_param.data.copy_(DQN_PARAMS['tau'] * local_param.data +
                                             (1.0 - DQN_PARAMS['tau']) * target_param.data)
-
 
     def save(self, path, *data):
         torch.save(self.policy.state_dict(), path / 'dqn/model_checkpoint.local')
