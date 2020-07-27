@@ -172,9 +172,9 @@ def as_tensor(array_list):
 
 def make_tensor(current, old):
     if model_type == 1:
-        tensor = (torch.cat([old[0], current[0]], -1),)
+        tensor = (torch.cat([old[0], current[0]], -1), torch.zeros(1))
     elif model_type == 0:
-        tensor = (torch.cat([old[0].flatten(1, 2), current[0].flatten(1, 2)], 1),)
+        tensor = (torch.cat([old[0].flatten(1, 2), current[0].flatten(1, 2)], 1), torch.zeros(1))
     else:  # model_type == 2
         tensor = (torch.cat((old[0], current[0]), 1), torch.cat((old[1], current[1]), -1))
         tensor[1].transpose_(1, -1)
@@ -220,7 +220,8 @@ while True:
     score, collision = 0, False
     agent_count = len(environments[0].agents)
 
-    agent_action_buffer = [[2] * agent_count for _ in range(BATCH_SIZE)]
+    agent_action_buffer = torch.zeros((BATCH_SIZE, 5, agent_count), device=device, dtype=torch.float)
+    agent_action_buffer[:, 2] += 1
     agent_obs, _ = get_observation_tensor(obs)
     agent_obs_buffer = clone(agent_obs)
     input_tensor = make_tensor(agent_obs, agent_obs_buffer)
@@ -234,7 +235,7 @@ while True:
     for step in range(max_steps):
         done = _done
 
-        ret_action = agent.multi_act(input_tensor)
+        mdl_action, ret_action = agent.multi_act(input_tensor, False)
         action_dict = [dict(enumerate(act_list)) for act_list in ret_action]
 
         # Environment step
@@ -256,7 +257,7 @@ while True:
                        next_input,
                        flags.step_reward,
                        flags.collision_reward)
-            agent_action_buffer = [[act[i] for i in range(agent_count)] for act in action_dict]
+            agent_action_buffer = mdl_action
 
         if all_done:
             break

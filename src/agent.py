@@ -1,32 +1,49 @@
 import math
 import pickle
+import typing
 
 import numpy as np
 import torch
 from torch_optimizer import Yogi as Optimizer
 
 try:
-    from .model import QNetwork, ConvNetwork, init, GlobalStateNetwork
+    from .model import QNetwork, ConvNetwork, init, GlobalStateNetwork, TripleClassificationHead, NAFHead
 except:
-    from model import QNetwork, ConvNetwork, init, GlobalStateNetwork
+    from model import QNetwork, ConvNetwork, init, GlobalStateNetwork, TripleClassificationHead, NAFHead
 import os
 
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 CLIP_FACTOR = 0.2
 LR = 1e-4
 UPDATE_EVERY = 1
 CUDA = True
 MINI_BACKWARD = False
-DQN = False
-DQN_PARAMS = {'tau': 1e-3, 'gamma': 0.998}
-EPOCHS = 16
+DQN_TAU = 1e-3
+EPOCHS = 1
 
 device = torch.device("cuda:0" if CUDA and torch.cuda.is_available() else "cpu")
 
 
-class Agent:
+@torch.jit.script
+def aggregate(loss: torch.Tensor):
+    maximum, _ = loss.max(0)
+    return maximum.sum()
+
+
+@torch.jit.script
+def mse(in_x, in_y):
+    return aggregate((in_x - in_y).square())
+
+
+@torch.jit.script
+def dqn_target(rewards, targets_next, done):
+    return rewards + 0.998 * targets_next * (1 - done)
+
+
+class Agent(torch.nn.Module):
     def __init__(self, state_size, action_size, model_depth, hidden_factor, kernel_size, squeeze_heads, decoder_depth,
-                 model_type=0, softmax=True, debug=True):
+                 model_type=0, softmax=True, debug=True, loss_type='PPO'):
+        super(Agent, self).__init__()
         self.action_size = action_size
 
         # Q-Network
@@ -36,21 +53,25 @@ class Agent:
             network = QNetwork
         else:  # Global State
             network = GlobalStateNetwork
+        if loss_type in ('PPO', 'DQN'):
+            tail = TripleClassificationHead(hidden_factor, action_size)
+        else:
+            tail = NAFHead(hidden_factor, action_size)
         self.policy = network(state_size,
-                              action_size,
                               hidden_factor,
                               model_depth,
                               kernel_size,
                               squeeze_heads,
                               decoder_depth,
+                              tail=tail,
                               softmax=softmax).to(device)
         self.old_policy = network(state_size,
-                                  action_size,
                                   hidden_factor,
                                   model_depth,
                                   kernel_size,
                                   squeeze_heads,
                                   decoder_depth,
+                                  tail=tail,
                                   softmax=softmax,
                                   debug=False).to(device)
         if debug:
@@ -78,16 +99,57 @@ class Agent:
         self.t_step = 0
         self.idx = 1
         self.tensor_stack = []
+        self._policy_update = loss_type in ("PPO",)
+        self._soft_update = loss_type in ("DQN", "NAF")
+
+        self._action_index = torch.zeros(1)
+        self._value_index = torch.zeros(1) + 1
+        self._triangular_index = torch.zeros(1) + 2
+
+        self.loss = getattr(self, f'_{loss_type.lower()}_loss')
+
+    def _dqn_loss(self, states, actions, next_states, rewards, done):
+        actions = actions.argmax(1)
+        expected = self.policy(self._action_index, self._action_index, *states).gather(1, actions)
+        best_action = self.policy(self._action_index, self._action_index, next_states).argmax(1)
+        targets_next = self.old_policy(self._action_index, self._action_index,
+                                       *next_states).gather(1, best_action.unsqueeze(1))
+        targets = dqn_target(rewards, targets_next, done)
+        loss = mse(expected, targets)
+        return loss
+
+    def _naf_loss(self, states, actions, next_states, rewards, done):
+        targets_next = self.old_policy(self._value_index, self._action_index, next_states)
+        state_action_values = self.policy(self._triangular_index, actions, states)
+        targets = dqn_target(rewards, targets_next, done)
+        loss = mse(state_action_values, targets)
+        return loss
+
+    def _ppo_loss(self, states, actions, next_states, rewards, done):
+        _ = next_states
+        _ = done
+        actions = actions.argmax(1)
+        states_clone = [st.clone().detach().requires_grad_(False) for st in states]
+        old_responsible_outputs = self.old_policy(self._action_index, self._action_index,
+                                                  *states_clone).gather(1, actions).detach_()
+        responsible_outputs = self.policy(self._action_index, self._action_index, *states).gather(1, actions)
+        ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
+        clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
+        loss = aggregate(torch.min(ratio * rewards, clamped_ratio * rewards)).neg()
+        return loss
 
     def reset(self):
         self.policy.reset_cache()
         self.old_policy.reset_cache()
 
-    def multi_act(self, state):
+    def multi_act(self, state, argmax_only=True) -> typing.Union[typing.Tuple[np.ndarray, np.ndarray], np.ndarray]:
         self.policy.eval()
         with torch.no_grad():
-            action_values = self.policy(*state)
-        return action_values.argmax(1).detach().cpu().numpy()
+            action_values = self.policy(self._action_index, self._action_index, *state).detach()
+        argmax = action_values.argmax(1).cpu().numpy()
+        if argmax_only:
+            return argmax
+        return action_values, argmax
 
     def step(self, state, action, agent_done, collision, next_state, step_reward=0, collision_reward=-2):
         agent_count = len(agent_done[0]) - 1
@@ -98,7 +160,7 @@ class Agent:
         self.stack[4].append(next_state)
 
         if MINI_BACKWARD or len(self.stack[0]) >= UPDATE_EVERY:
-            action = torch.tensor(self.stack[1]).flatten(0, 1).to(device).unsqueeze_(1)
+            action = torch.cat(self.stack[1]).to(device).unsqueeze_(1)
             agent_done = np.array(self.stack[2])
             collision = np.array(self.stack[3])
             reward = np.where(agent_done, 1, np.where(collision, collision_reward, step_reward))
@@ -121,20 +183,7 @@ class Agent:
 
         self.policy.train()
 
-        if DQN:
-            expected = self.policy(*states).gather(1, actions)
-            best_action = self.policy(*next_states).argmax(1)
-            targets_next = self.old_policy(*next_states).gather(1, best_action.unsqueeze(1))
-            targets = rewards + DQN_PARAMS['gamma'] * targets_next * (1 - done)
-            loss = (expected - targets).square().max(0)[0].sum()
-        else:
-            with torch.no_grad():
-                states_clone = tuple(st.clone().detach().requires_grad_(False) for st in states)
-                old_responsible_outputs = self.old_policy(*states_clone).gather(1, actions).detach_()
-            responsible_outputs = self.policy(*states).gather(1, actions)
-            ratio = responsible_outputs / (old_responsible_outputs + 1e-5)
-            clamped_ratio = torch.clamp(ratio, 1. - CLIP_FACTOR, 1. + CLIP_FACTOR)
-            loss = torch.min(ratio * rewards, clamped_ratio * rewards).max(0)[0].sum().neg()
+        loss = self.loss(states, actions, next_states, rewards, done)
 
         if MINI_BACKWARD:
             loss = loss / UPDATE_EVERY
@@ -142,14 +191,14 @@ class Agent:
         loss.backward()
 
         if not MINI_BACKWARD or self.idx == 0:
-            if not DQN:
+            if self._policy_update:
                 self.old_policy.load_state_dict(self.policy.state_dict())
             self.optimizer.step()
             self.optimizer.zero_grad()
-            if DQN:
+            if self._soft_update:
                 for target_param, local_param in zip(self.old_policy.parameters(), self.policy.parameters()):
-                    target_param.data.copy_(DQN_PARAMS['tau'] * local_param.data +
-                                            (1.0 - DQN_PARAMS['tau']) * target_param.data)
+                    target_param.data.copy_(DQN_TAU * local_param.data +
+                                            (1.0 - DQN_TAU) * target_param.data)
 
     def save(self, path, *data):
         torch.save(self.policy.state_dict(), path / 'dqn/model_checkpoint.local')
