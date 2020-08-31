@@ -9,3 +9,24 @@ venv/
 .DS_Store
 
 *.pyc
+/src/a.out
+/index.html
+/checkpoints/dqn/dqn0/loss.txt
+/.idea/**
+**model_checkpoint*
+/.idea/modules.xml
+/src/obs.so
+/src/observation_utils.c
+/src/observation_utils.h
+/src/observation_utils.so
+/.idea/other.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/inspectionProfiles/Project_Default.xml
+/r/rail_networks_35x40x40.pkl
+/r/rail_networks_sum.pkl
+/r/schedules_35x40x40.pkl
+/r/schedules_sum.pkl
+/.idea/vcs.xml
+*.c
+*.so
+*.out
