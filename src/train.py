@@ -4,10 +4,9 @@ import argparse
 import numpy as np
 from pathlib import Path
 from collections import deque
-from tensorboardX import SummaryWriter
 
 from flatland.envs.rail_env import RailEnv, RailEnvActions
-from flatland.envs.malfunction_generators import malfunction_from_params, MalfunctionParameters
+from flatland.envs.malfunction_generators import ParamMalfunctionGen, MalfunctionParameters
 from flatland.utils.rendertools import RenderTool, AgentRenderVariant
 
 from dqn.agent import Agent as DQN_Agent
@@ -29,9 +28,9 @@ parser.add_argument("--report-interval", type=int, default=100, help="Iterations
 parser.add_argument("--render-interval", type=int, default=0, help="Iterations between renders")
 
 # Environment parameters
-parser.add_argument("--grid-width", type=int, default=50, help="Number of columns in the environment grid")
-parser.add_argument("--grid-height", type=int, default=50, help="Number of rows in the environment grid")
-parser.add_argument("--num-agents", type=int, default=5, help="Number of agents in each episode")
+parser.add_argument("--grid-width", type=int, default=35, help="Number of columns in the environment grid")
+parser.add_argument("--grid-height", type=int, default=35, help="Number of rows in the environment grid")
+parser.add_argument("--num-agents", type=int, default=1, help="Number of agents in each episode")
 parser.add_argument("--tree-depth", type=int, default=1, help="Depth of the observation tree")
 
 # Training parameters
@@ -43,10 +42,7 @@ flags = parser.parse_args()
 
 
 # Seeded RNG so we can replicate our results
-np.random.seed(1)
-
-# Create a tensorboard SummaryWriter
-summary = SummaryWriter(f'tensorboard/dqn/agents: {flags.num_agents}, tree_depth: {flags.tree_depth}')
+np.random.seed(0)
 
 # We need to either load in some pre-generated railways from disk, or else create a random railway generator.
 if flags.load_railways:
@@ -57,9 +53,8 @@ else: rail_generator, schedule_generator = create_random_railways(project_root)
 env = RailEnv(width=flags.grid_width, height=flags.grid_height, number_of_agents=flags.num_agents,
               rail_generator=rail_generator,
               schedule_generator=schedule_generator,
-              malfunction_generator_and_process_data=malfunction_from_params(MalfunctionParameters(1 / 8000, 15, 50)),
-              obs_builder_object=TreeObservation(max_depth=flags.tree_depth)
-)
+              malfunction_generator=ParamMalfunctionGen(MalfunctionParameters(1 / 8000, 15, 50)),
+              obs_builder_object=TreeObservation(max_depth=flags.tree_depth))
 
 # After training we want to render the results so we also load a renderer
 env_renderer = RenderTool(env, gl="PILSVG", screen_width=800, screen_height=800, agent_render_variant=AgentRenderVariant.AGENT_SHOWS_OPTIONS_AND_BOX)
@@ -204,9 +199,3 @@ for episode in range(start + 1, flags.num_episodes + 1):
         print(get_report(show_time=True))
         start_time = time.time()
         if flags.train: agent.save(project_root / 'checkpoints', episode, eps)
-
-    # Add stats to the tensorboard summary
-    summary.add_scalar('performance/avg_score', np.mean(scores_window), episode)
-    summary.add_scalar('performance/avg_steps', np.mean(steps_window), episode)
-    summary.add_scalar('performance/completions', np.mean(done_window), episode)
-    summary.add_scalar('performance/collisions', np.mean(collisions_window), episode)

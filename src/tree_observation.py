@@ -4,11 +4,10 @@ from collections import defaultdict
 from flatland.core.env_observation_builder import ObservationBuilder
 from flatland.core.grid.grid4_utils import get_new_position
 from flatland.envs.agent_utils import RailAgentStatus
-from flatland.envs.observations import TreeObsForRailEnv
+from flatland.envs.observations import Node
 
 
 ACTIONS = ['L', 'F', 'R', 'B']
-Node = TreeObsForRailEnv.Node
 
 def first(list):
     return next(iter(list))

@@ -63,9 +63,9 @@ class Agent:
         # Perform a gradient update every UPDATE_EVERY time steps
         self.t_step = (self.t_step + 1) % UPDATE_EVERY
         if self.t_step == 0 and len(self.memory) > BATCH_SIZE * 4:
-            self.learn(*self.memory.sample(BATCH_SIZE, device))
+            self.train(*self.memory.sample(BATCH_SIZE, device))
 
-    def learn(self, states, actions, rewards, next_state, done):
+    def train(self, states, actions, rewards, next_state, done):
         self.policy.train()
 
         responsible_outputs = torch.gather(self.policy(states), 1, actions)
