@@ -1,4 +1,5 @@
 import numpy as np
+from dataclasses import astuple
 from tree_observation import ACTIONS
 
 ZERO_NODE = np.array([0] * 11) # For Q-Networks
@@ -8,12 +9,12 @@ INF_DISTANCE_NODE = np.array([0] * 6 + [np.inf] + [0] * 4) # For policy networks
 # Helper function to detect collisions
 def is_collision(obs):
     return obs is not None \
-       and isinstance(obs.childs['L'], float) \
-       and isinstance(obs.childs['R'], float) \
-       and obs.childs['F'].num_agents_opposite_direction > 0 \
-       and obs.childs['F'].dist_other_agent_encountered <= 1 \
-       and obs.childs['F'].dist_other_agent_encountered < obs.childs['F'].dist_unusable_switch
-       # and obs.childs['F'].dist_other_agent_encountered < obs.childs['F'].dist_to_next_branch
+       and isinstance(obs.children['L'], float) \
+       and isinstance(obs.children['R'], float) \
+       and obs.children['F'].num_agents_opposite_direction > 0 \
+       and obs.children['F'].dist_other_agent_encountered <= 1 \
+       and obs.children['F'].dist_other_agent_encountered < obs.children['F'].dist_unusable_switch
+       # and obs.children['F'].dist_other_agent_encountered < obs.children['F'].dist_to_next_branch
 
 
 # Recursively create numpy arrays for each tree node
@@ -23,10 +24,10 @@ def create_tree_features(node, current_depth, max_depth, empty_node, data):
         data.extend([empty_node] * num_remaining_nodes)
 
     else:
-        data.append(np.array(tuple(node)[:-2]))
-        if node.childs:
+        data.append(np.array(astuple(node)[:-2]))
+        if node.children:
             for direction in ACTIONS:
-                create_tree_features(node.childs[direction], current_depth + 1, max_depth, empty_node, data)
+                create_tree_features(node.children[direction], current_depth + 1, max_depth, empty_node, data)
 
     return data
 

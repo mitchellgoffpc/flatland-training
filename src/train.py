@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import cv2
 import time
 import argparse
@@ -99,13 +100,13 @@ ACTIONS = { 0: 'B', 1: 'L', 2: 'F', 3: 'R', 4: 'S' }
 
 def is_collision(a):
     if obs[a] is None: return False
-    is_junction = not isinstance(obs[a].childs['L'], float) or not isinstance(obs[a].childs['R'], float)
+    is_junction = not isinstance(obs[a].children['L'], float) or not isinstance(obs[a].children['R'], float)
 
     if not is_junction or env.agents[a].speed_data['position_fraction'] > 0:
           action = ACTIONS[env.agents[a].speed_data['transition_action_on_cellexit']] if is_junction else 'F'
-          return obs[a].childs[action].num_agents_opposite_direction > 0 \
-                 and obs[a].childs[action].dist_other_agent_encountered <= 1 \
-                 and obs[a].childs[action].dist_other_agent_encountered < obs[a].childs[action].dist_unusable_switch
+          return obs[a].children[action].num_agents_opposite_direction > 0 \
+                 and obs[a].children[action].dist_other_agent_encountered <= 1 \
+                 and obs[a].children[action].dist_other_agent_encountered < obs[a].children[action].dist_unusable_switch
     else: return False
 
 # Helper function to render the environment

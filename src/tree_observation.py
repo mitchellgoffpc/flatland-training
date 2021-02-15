@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import numpy as np
+from dataclasses import dataclass
 from collections import defaultdict
 
 from flatland.core.env_observation_builder import ObservationBuilder
 from flatland.core.grid.grid4_utils import get_new_position
 from flatland.envs.agent_utils import RailAgentStatus
-from flatland.envs.observations import Node
 
 
 ACTIONS = ['L', 'F', 'R', 'B']
@@ -21,6 +23,23 @@ def get_direction(orientation, action):
     elif action == 3:
           return (orientation + 1) % 4
     else: return orientation
+
+
+@dataclass
+class TreeNode:
+    dist_own_target_encountered: int
+    dist_other_target_encountered: int
+    dist_other_agent_encountered: int
+    dist_potential_conflict: int
+    dist_unusable_switch: int
+    dist_to_next_branch: int
+    dist_min_to_target: int
+    num_agents_same_direction: int
+    num_agents_opposite_direction: int
+    num_agents_malfunctioning: int
+    speed_min_fractional: float
+    num_agents_ready_to_depart: int
+    children: list[TreeNode]
 
 
 class RailNode:
@@ -183,7 +202,7 @@ class TreeObservation(ObservationBuilder):
         children = { x: -np.inf for x in ACTIONS }
         dist_min_to_target = self.env.distance_map.get()[(handle, *agent_position, agent.direction)]
         agent_malfunctioning, agent_speed = agent.malfunction_data['malfunction'], agent.speed_data['speed']
-        root_tree_node = Node(0, 0, 0, 0, 0, 0, dist_min_to_target, 0, 0, agent_malfunctioning, agent_speed, 0, children)
+        root_tree_node = TreeNode(0, 0, 0, 0, 0, 0, dist_min_to_target, 0, 0, agent_malfunctioning, agent_speed, 0, children)
 
         # Then we build out the tree by exploring from this node
         key = (*agent_position, agent.direction)
@@ -191,15 +210,15 @@ class TreeObservation(ObservationBuilder):
             node = self.graph[key]
             if len(node.edges) > 1: # Major node
                 for direction in self.graph[key].edges.keys():
-                    root_tree_node.childs[get_action(agent.direction, direction)] = \
+                    root_tree_node.children[get_action(agent.direction, direction)] = \
                         self.get_tree_branch(agent, node, direction, visited_cells, 0, 1)
             else: # Minor node
                 direction = first(self.get_possible_transitions(node.position, agent.direction))
-                root_tree_node.childs['F'] = self.get_tree_branch(agent, node, direction, visited_cells, 0, 1)
+                root_tree_node.children['F'] = self.get_tree_branch(agent, node, direction, visited_cells, 0, 1)
 
         else: # Just create a single child in the forward direction
             prev_node, next_node, direction, distance = first(self.edge_positions[key])
-            root_tree_node.childs['F'] = self.get_tree_branch(agent, prev_node, direction, visited_cells, -distance, 1)
+            root_tree_node.children['F'] = self.get_tree_branch(agent, prev_node, direction, visited_cells, -distance, 1)
 
         self.env.dev_obs_dict[handle] = visited_cells
 
@@ -291,19 +310,19 @@ class TreeObservation(ObservationBuilder):
 
         else: children = {}
 
-        return Node(dist_own_target_encountered=total_distance + distance_to_own_target,
-                    dist_other_target_encountered=total_distance + distance_to_other_target,
-                    dist_other_agent_encountered=total_distance + distance_to_other_agent,
-                    dist_potential_conflict=np.inf,
-                    dist_unusable_switch=total_distance + distance_to_minor_node,
-                    dist_to_next_branch=total_distance + edge_length,
-                    dist_min_to_target=self.env.distance_map.get()[(agent.handle, *node.position, orientation)] or 0,
-                    num_agents_same_direction=num_agents_same_direction,
-                    num_agents_opposite_direction=num_agents_other_direction,
-                    num_agents_malfunctioning=max_malfunction_length,
-                    speed_min_fractional=min_agent_speed,
-                    num_agents_ready_to_depart=num_agent_departures,
-                    childs=children)
+        return TreeNode(dist_own_target_encountered=total_distance + distance_to_own_target,
+                        dist_other_target_encountered=total_distance + distance_to_other_target,
+                        dist_other_agent_encountered=total_distance + distance_to_other_agent,
+                        dist_potential_conflict=np.inf,
+                        dist_unusable_switch=total_distance + distance_to_minor_node,
+                        dist_to_next_branch=total_distance + edge_length,
+                        dist_min_to_target=self.env.distance_map.get()[(agent.handle, *node.position, orientation)] or 0,
+                        num_agents_same_direction=num_agents_same_direction,
+                        num_agents_opposite_direction=num_agents_other_direction,
+                        num_agents_malfunctioning=max_malfunction_length,
+                        speed_min_fractional=min_agent_speed,
+                        num_agents_ready_to_depart=num_agent_departures,
+                        children=children)
 
 
     # Helper functions
