@@ -2,5 +2,5 @@ flatland-rl==2.2.2
 numpy==1.19.4
 torch==1.7.1
 opencv-python==4.5.1.48
-Pillow==8.1.0
+Pillow==9.0.1
 tqdm==4.56.0
